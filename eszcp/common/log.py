@@ -1,6 +1,5 @@
-#
-#    Author : Branty(jun.wang@easystack.cn)
-#    All Rights Reserved.
+#    Copyright  2017 EasyStack, Inc
+#    Author: Branty(jun.wang@easystack.cn)
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -15,18 +14,11 @@
 #    under the License.
 
 
-from eszcp.readFile import ReadConfFile
+from eszcp.common.readFile import ReadConfFile
 import logging
 from logging import handlers
 import os
 
-__authors__ = "Claudio Marques, David Palma, Luis Cordeiro, Branty"
-__copyright__ = "Copyright (c) 2014 OneSource Consultoria Informatica, Lda"
-__license__ = "Apache 2"
-__contact__ = ["www.onesource.pt", "www.openstack.cn"]
-__date__ = "03/01/2016"
-__email__ = "jun.wang@easystack.cn"
-__version__ = "1.0.0"
 
 cfg_file = ReadConfFile()
 root_level = cfg_file.read_option('log', 'root_level')

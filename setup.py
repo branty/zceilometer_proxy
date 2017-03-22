@@ -7,7 +7,7 @@ setup(
     version="1.0.0",
     author="Branty",
     author_email="jun.wang@easystack.cn",
-    packages=['eszcp'],
+    packages=find_packages(),
     scripts=['bin/eszcp-polling'],
     url="www.easystack.cn",
     description="A Timer task for polling ceilometer metrics into zabbix"

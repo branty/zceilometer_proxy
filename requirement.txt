@@ -3,3 +3,4 @@
 # process, which may cause wedges in the gate later.
 pika==0.9.12
 setuptools>=16.0
+python-keystoneclient!=1.8.0,<3.0.0,>=1.6.0
