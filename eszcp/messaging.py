@@ -42,14 +42,14 @@ def connection():
                 credentials=pika.PlainCredentials(user,
                                                   passwd)))
         except Exception as e:
-            LOG.warning("Fail to connect to Rabbitmq server %s : %s" % (host, e))
+            LOG.warning("Fail to connect to Rabbitmq server %s : %s" % (host,
+                                                                        e))
         else:
             connection_state = True
             break
     if connection_state:
         return connect
     else:
-        LOG.error("Fail to connect to Rabbitmq nodes: %s. Please configure rabbitmq "
-                  "with correct parameters!" % hosts.split(','))
+        LOG.error("Fail to connect to Rabbitmq nodes: %s. Please configure "
+                  "rabbitmq with correct parameters!" % hosts.split(','))
         raise
-

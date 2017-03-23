@@ -35,12 +35,14 @@ LOG = log.logger(__name__)
 
 
 class ProjectEvents:
-    def __init__(self, zabbix_handler, connection):
+    def __init__(self, zabbix_handler, connection, ks_client):
         """
         :param zabbix_handler: zabbix api handler
         :param connection: rabbitmq connection instance
+        :param ks_client: keystone client
         """
         self.zabbix_handler = zabbix_handler
+        self.ks_client = ks_client
         self.rabbit_connection = connection
 
     def keystone_amq(self):
@@ -58,6 +60,39 @@ class ProjectEvents:
                               no_ack=True)
         channel.start_consuming()
 
+    def _handler_events(self, payload):
+        if payload['event_type'] == 'identity.project.created':
+            tenant_id = payload['payload']['resource_info']
+            tenants = self.zabbix_handler.get_tenants()
+            tenant_name = self.zabbix_handler.get_tenant_name(tenants,
+                                                              tenant_id)
+            LOG.info("Creating a hostgroup: %s(%s) in Zabbix Server"
+                     % (tenant_id, tenant_name))
+            self.zabbix_handler.group_list.append([tenant_name, tenant_id])
+            self.zabbix_handler.create_host_group(tenant_name)
+        elif payload['event_type'] == 'identity.project.deleted':
+            tenant_id = payload['payload']['resource_info']
+            LOG.info("Deleting a hostgroup: %s in Zabbix Server"
+                     % tenant_id)
+            self.zabbix_handler.project_delete(tenant_id)
+        elif payload['event_type'] == 'identity.domain.created':
+            domain_id = payload['payload']['resource_info']
+            domain_ref = self.ks_client.show_domain(domain_id)
+            domain_name = domain_ref['name'] if isinstance(
+                          domain_ref, dict) else domain_ref.name
+            LOG.info("Creating a zabbix proxy: %s(%s) in Zabbix Server"
+                     % (domain_name, domain_id))
+            self.zabbix_handler.create_proxy(domain_name, domain_id)
+        elif payload['event_type'] == 'identity.domain.deleted':
+            domain_id = payload['payload']['resource_info']
+            LOG.info("Deleting a zabbix proxy: %s in Zabbix Server"
+                     % domain_id)
+            self.zabbix_handler.delete_proxy(domain_id)
+        else:
+            # TO DO
+            # Maybe more event types will be supported
+            pass
+
     def keystone_callback(self, ch, method, properties, body):
         """
         Method used by method keystone_amq() to filter messages
@@ -70,24 +105,7 @@ class ProjectEvents:
         """
         payload = json.loads(body)
         try:
-            if payload['event_type'] == 'identity.project.created':
-                tenant_id = payload['payload']['resource_info']
-                tenants = self.zabbix_handler.get_tenants()
-                tenant_name = self.zabbix_handler.get_tenant_name(tenants,
-                                                                  tenant_id)
-                LOG.info("Creating a hostgroup: %s(%s) in Zabbix Server"
-                         % (tenant_id, tenant_name))
-                self.zabbix_handler.group_list.append([tenant_name, tenant_id])
-                self.zabbix_handler.create_host_group(tenant_name)
-            elif payload['event_type'] == 'identity.project.deleted':
-                tenant_id = payload['payload']['resource_info']
-                LOG.info("Deleting a hostgroup: %s in Zabbix Server"
-                         % tenant_id)
-                self.zabbix_handler.project_delete(tenant_id)
-            else:
-                # TO DO
-                # Maybe more event types will be supported
-                pass
+            self._handler_events(payload)
         except Exception, ex:
             LOG.error(ex.message)
             raise

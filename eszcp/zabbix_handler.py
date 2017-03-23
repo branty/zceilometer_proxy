@@ -16,7 +16,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
 """
 Zabbix Handler
 
@@ -25,20 +24,32 @@ Provides a class responsible for the communication with Zabbix,
 including access to several API methods
 """
 
+import functools
 import json
 import urllib2
 
 from eszcp.common import log
 from eszcp import utils
 
-
 LOG = log.logger(__name__)
+
+
+def logged(func):
+
+    @functools.wraps(func)
+    def with_logging(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception, ex:
+            LOG.error(ex)
+            raise
+    return with_logging
 
 
 class ZabbixHandler:
     def __init__(self, keystone_admin_port, compute_port, admin_user,
                  zabbix_admin_pass, zabbix_host, keystone_host,
-                 template_name, zabbix_proxy_name, keystone_auth):
+                 template_name, ks_client, nv_client):
 
         self.keystone_admin_port = keystone_admin_port
         self.compute_port = compute_port
@@ -47,17 +58,16 @@ class ZabbixHandler:
         self.zabbix_host = zabbix_host
         self.keystone_host = keystone_host
         self.template_name = template_name
-        self.zabbix_proxy_name = zabbix_proxy_name
-        self.keystone_auth = keystone_auth
-        self.token = keystone_auth.getToken()
+        self.ks_client = ks_client
+        self.nv_client = nv_client
+        self.group_list = []
 
     def first_run(self):
 
         self.api_auth = self.get_zabbix_auth()
-        self.proxy_id = self.get_proxy_id()
+        self.proxies = self.check_proxies()
         self.template_id = self.get_template_id()
-        tenants = self.get_tenants()
-        self.group_list = []
+        tenants = self.ks_client.get_projects()
         self.group_list = self.host_group_list(tenants)
         self.check_host_groups()
         self.check_instances()
@@ -75,6 +85,9 @@ class ZabbixHandler:
                               "password": self.zabbix_admin_pass},
                    "id": 2}
         response = self.contact_zabbix_server(payload)
+        if 'error' in response:
+            LOG.error('Incorrect user or password,please check it again')
+            raise
         zabbix_auth = response['result']
         return zabbix_auth
 
@@ -155,11 +168,13 @@ class ZabbixHandler:
 
         return payload
 
-    def get_proxy_id(self):
+    @logged
+    def check_proxies(self):
         """
-        Method used to check if the proxy exists.
+        Method used to check if those proxies exist.
+        Map keystone domain to zabbix proxy.
 
-        :return: a control value and the proxy ID if exists
+        :return: a control value and those proxies if exists
         """
         payload = {
             "jsonrpc": "2.0",
@@ -170,110 +185,106 @@ class ZabbixHandler:
             "auth": self.api_auth,
             "id": 1
         }
-
+        # return all proxies in zabbix
         response = self.contact_zabbix_server(payload)
-
-        proxy_id = None
-
-        for item in response['result']:
-            if item['host'] == self.zabbix_proxy_name:
-                proxy_id = item['proxyid']
-                break
-        if not proxy_id:
-            '''
-            Check if proxy exists, if not create one
-            '''
-            payload = {"jsonrpc": "2.0",
+        proxies = [proxy['host'] for proxy in response['result']]
+        # return all domains in keystone
+        domains = [domain for domain in self.ks_client.get_domains()]
+        # each item in current_proxies:[proxy_id,domain_id]
+        current_proxies = []
+        for domain in domains:
+            payload = {
+                       "jsonrpc": "2.0",
                        "method": "proxy.create",
                        "params": {
-                           "host": self.zabbix_proxy_name,
+                           "host": domain.name,
                            "status": "5"
                        },
                        "auth": self.api_auth,
                        "id": 1
                        }
             response = self.contact_zabbix_server(payload)
-            proxy_id = response['result']['proxyids'][0]
-            return proxy_id
+            if domain.name not in proxies:
+                '''
+                Check if proxy exists, if not create one
+                '''
+                # host: domain ID truncated by the first eight
+                if domain.id[:8] in proxies:
+                    current_proxies.append([domain.id[:6],
+                                            domain.id])
+                    continue
+                LOG.info("%s is not in zabbix proxies, starting to create a "
+                         "new proxy mapping to keystone domain" % domain.name)
+                # NOTE: when '@','#' or other No ASSIC char in name string,
+                # raise 'Invalid Params' error.
+                # Then Replace zabbix proxy name with domain ID
+                # host: domain ID truncated by the first eight
+                if 'error' in response:
+                    payload['params']['host'] = domain.id[:8]
+                    response = self.contact_zabbix_server(payload)
+                proxy_id = response['result']['proxyids'][0]
+                current_proxies.append([proxy_id, domain.id])
+                LOG.info("%s is not in zabbix proxies, success to create a "
+                         "new proxy mapping to keystone domain" % domain.name)
+            else:
+                current_proxies.append([domain.name, domain.id])
+        return current_proxies
 
-        return proxy_id
-
+    @logged
     def check_host_groups(self):
         """
         This method checks if some host group exists
 
         """
-        for item in self.group_list:
-            tenant_name = item[0]
-            payload = {
+        payload = {
                 "jsonrpc": "2.0",
                 "method": "hostgroup.get",
                 "params": {
-                    "output": "extend",
-                    "filter": {"name": tenant_name}
+                    "output": "extend"
                 },
                 "auth": self.api_auth,
                 "id": 1
-            }
-            response = self.contact_zabbix_server(payload)
-            if not response.get('result', []):
+        }
+        # Get all host groups
+        response = self.contact_zabbix_server(payload)
+        zabbix_hostgroups = [gp['name'] for gp in response['result']]
+        for item in self.group_list:
+            if item[0] not in zabbix_hostgroups:
+                # Prevent naming collision
+                if str(item[0] + item[1][:6]) in zabbix_hostgroups:
+                    continue
                 payload = {"jsonrpc": "2.0",
                            "method": "hostgroup.create",
-                           "params": {"name": tenant_name},
+                           "params": {"name": item[0]},
                            "auth": self.api_auth,
                            "id": 2}
-                self.contact_zabbix_server(payload)
+                response = self.contact_zabbix_server(payload)
+                if 'error' in response:
+                    # NOTE:host name collision ,rename host_name =
+                    # <tenant ID truncated by the first six> + <tenant_nam>
+                    payload['params']['name'] = item[0] + item[1][:6]
+                    response = self.contact_zabbix_server(payload)
+                if response.get('result'):
+                    LOG.info("Success to create a new hostgroup: %s, "
+                             "zabbix hostgroup mapping to keystone project."
+                             % payload['params']['name'])
+                else:
+                    LOG.info("Failed to create a new hostgroup: %s, "
+                             "zabbix hostgroup mapping to keystone project."
+                             % payload['params']['name'])
+            else:
+                LOG.info("Already exists a new hostgroup: %s, "
+                         "zabbix hostgroup mapping to keystone project."
+                         % payload['params']['name'])
 
+    @logged
     def check_instances(self):
         """
         Method used to verify existence of an instance / host
 
         """
-        servers = None
-        tenant_id = None
-        for item in self.group_list:
-            tenant_name = item[0]
-            if tenant_name == 'admin':
-                tenant_id = item[1]
-
-        auth_request = urllib2.Request(
-            "http://" + self.keystone_host + ":" +
-            self.compute_port + "/v2/" + tenant_id +
-            "/servers/detail?all_tenants=1")
-
-        auth_request.add_header('Content-Type',
-                                'application/json;charset=utf8')
-        auth_request.add_header('Accept', 'application/json')
-        auth_request.add_header('X-Auth-Token', self.token)
-        try:
-            auth_response = urllib2.urlopen(auth_request)
-            servers = json.loads(auth_response.read())
-
-        except urllib2.HTTPError, e:
-            if e.code == 401:
-                msg = "Error... \nToken refused! " \
-                      "The request you have made requires authentication."
-                LOG.error(msg)
-                raise
-            elif e.code == 404:
-                msg = "Can't found  tenant_id: %s " \
-                      % tenant_id
-                LOG.error(msg)
-                raise
-            elif e.code == 503:
-                msg = "HTTP Error 503,The service of nova is unavailable"
-                LOG.error(msg)
-                raise
-            else:
-                LOG.error("Unknown Error")
-                raise
-        except Exception, ex:
-            msg = hasattr(ex, 'message', None) or \
-                  hasattr(ex, 'msg', '')
-            LOG.error(msg)
-            raise
-
-        for item in servers[u'servers']:
+        servers = [i.to_dict() for i in self.nv_client.instance_get_all()]
+        for item in servers:
             if utils.isUseable_instance(item['status']):
                 payload = {
                     "jsonrpc": "2.0",
@@ -286,27 +297,45 @@ class ZabbixHandler:
                     "id": 1
                 }
                 response = self.contact_zabbix_server(payload)
-
+                # the Nova instance has not been create in zabbix,
+                # so the result in the return body in []
                 if not response.get('result', []):
                     for row in self.group_list:
                         if row[1] == item['tenant_id']:
                             instance_name = item['name']
                             instance_id = item['id']
+                            domain_id = row[2]
                             tenant_name = row[0]
                             self.create_host(
                                          instance_name,
                                          instance_id,
-                                         tenant_name)
+                                         tenant_name,
+                                         item['tenant_id'],
+                                         domain_id,
+                                         )
+                            LOG.info(
+                                "Success to create a new host: %s, "
+                                "The instances is to a keystone "
+                                "project(%s),and now create a new zabbix host "
+                                "added to the zabbix hostgroup. "
+                                % (instance_name,
+                                   tenant_name
+                                   )
+                            )
+                else:
+                    LOG.info("Zabbix host(%s) has already exists."
+                             % item['id'])
             else:
                 msg = "Drop to check or create instance ," \
                       "the status of %(instance_name)s(%(instance_id)s) " \
-                      "is in %(status)s" \
+                      "is in %(status)s." \
                       % {"instance_name": item['name'],
                          "instance_id": item['id'],
                          "status": item['status']}
                 LOG.warning(msg)
 
-    def create_host(self, instance_name, instance_id, tenant_name):
+    def create_host(self, instance_name, instance_id,
+                    tenant_name, tenant_id, domain_id):
 
         """
         Method used to create a host in Zabbix server
@@ -314,18 +343,20 @@ class ZabbixHandler:
         :param instance_name: refers to the instance name
         :param instance_id:   refers to the instance id
         :param tenant_name:   refers to the tenant name
+        :param domain_id:     refers to the domain id
         """
-        group_id = self.find_group_id(tenant_name)
+        group_id = self.find_group_id(tenant_name, tenant_id)
+        proxy_id = self.find_proxy_id(domain_id)
 
         if not (instance_id in instance_name):
-            instance_name = instance_name + '-' + instance_id
+            instance_name = instance_name + '_' + instance_id[:8]
 
         payload = {"jsonrpc": "2.0",
                    "method": "host.create",
                    "params": {
                        "host": instance_id,
                        "name": instance_name,
-                       "proxy_hostid": self.proxy_id,
+                       "proxy_hostid": proxy_id,
                        "interfaces": [
                            {
                                "type": 1,
@@ -349,13 +380,18 @@ class ZabbixHandler:
                    },
                    "auth": self.api_auth,
                    "id": 1}
-        self.contact_zabbix_server(payload)
+        response = self.contact_zabbix_server(payload)
+        if response.get('result'):
+            LOG.info("Success to create a new host: %s" % instance_name)
+        else:
+            LOG.warning("Failed to create a new host: %s" % instance_name)
 
-    def find_group_id(self, tenant_name):
+    def find_group_id(self, tenant_name, tenant_id):
         """
         Method used to find the the group id of an host in Zabbix server
 
         :param tenant_name: refers to the tenant name
+        :param tenant_id: refers to the tenant id
         :return: returns the group id that belongs to the host_group or tenant
         """
         group_id = None
@@ -372,7 +408,46 @@ class ZabbixHandler:
         for line in group_list:
             if line['name'] == tenant_name:
                 group_id = line['groupid']
+                break
+            elif line['name'] == tenant_name + tenant_id[:6]:
+                group_id = line['groupid']
+                break
         return group_id
+
+    def find_proxy_id(self, domain_id):
+        """
+        Method used to find the the proxy id of an host in Zabbix server
+
+        :param domain_name: refers to the domain name
+        :param domain_id: refers to the domain id
+        :return: returns the proxy id that belongs to the zabbix proxy
+        """
+        # When domain_id not found, raise exception
+        # TO DO
+        domain = self.ks_client.show_domain(domain_id)
+        payload = {"jsonrpc": "2.0",
+                   "method": "proxy.get",
+                   "params": {
+                       "output": "extend",
+                       "filter": {
+                            "host": domain.name
+                           }
+                   },
+                   "auth": self.api_auth,
+                   "id": 2
+                   }
+        response = self.contact_zabbix_server(payload)
+        proxy = response['result']
+        if proxy and len(proxy) > 0:
+            return proxy[0]['proxyid']
+        else:
+            payload['params']['filter']['host'] = domain.id[:8]
+            response = self.contact_zabbix_server(payload)
+            proxy = response['result']
+            if proxy and len(proxy) > 0:
+                return proxy[0]['proxyid']
+        # proxy not found
+        raise
 
     def get_template_id(self):
         """
@@ -471,47 +546,6 @@ class ZabbixHandler:
                    }
         self.contact_zabbix_server(payload)
 
-    def get_tenants(self):
-        """
-        Method used to get a list of tenants from keystone
-
-        :return: list of tenants
-        """
-        tenants = None
-        auth_request = urllib2.Request('http://' + self.keystone_host + ':' +
-                                       self.keystone_admin_port +
-                                       '/v2.0/tenants')
-        auth_request.add_header('Content-Type',
-                                'application/json;charset=utf8')
-        auth_request.add_header('Accept', 'application/json')
-        auth_request.add_header('X-Auth-Token', self.token)
-
-        try:
-            auth_response = urllib2.urlopen(auth_request)
-            tenants = json.loads(auth_response.read())
-        except urllib2.HTTPError, e:
-            if e.code == 401:
-                msg = "Error... \nToken refused! " \
-                      "The request you have made requires authentication."
-                LOG.error(msg)
-                raise
-            elif e.code == 404:
-                LOG.error("Not Found")
-                raise
-            elif e.code == 503:
-                msg = "HTTP Error 503,The service of ceilometer is unavailable"
-                LOG.error(msg)
-                raise
-            else:
-                LOG.error("Unknown Error")
-                raise
-        except Exception, ex:
-            msg = hasattr(ex, 'message', None) or \
-                  hasattr(ex, 'msg', '')
-            LOG.error(msg)
-            raise
-        return tenants
-
     def get_tenant_name(self, tenants, tenant_id):
         """
         Method used to get a name of a tenant using its id
@@ -535,9 +569,13 @@ class ZabbixHandler:
         [tenant_name2, uuid2], ..., [tenant_nameN, uuidN],]
         """
         host_group_list = []
-        for item in tenants['tenants']:
-            if not item['name'] == 'service':
-                host_group_list.append([item['name'], item['id']])
+        for item in tenants:
+            if not item.name == 'services':
+                host_group_list.append([item.name,
+                                        item.id,
+                                        item.domain_id
+                                        ]
+                                       )
 
         return host_group_list
 
@@ -580,6 +618,64 @@ class ZabbixHandler:
                    "auth": self.api_auth,
                    "id": 2}
         self.contact_zabbix_server(payload)
+
+    def create_proxy(self, domain_name, domain_id):
+        """
+        This method is used to create zabbix proxy. Every domain
+        is a zabbix proxy
+
+        :param domain_name: refs to keystone domain name
+        :param domain_id:   refs to keystone domain id
+        """
+        payload = {
+                       "jsonrpc": "2.0",
+                       "method": "proxy.create",
+                       "params": {
+                           "host": domain_name,
+                           "status": "5"
+                       },
+                       "auth": self.api_auth,
+                       "id": 1
+        }
+        proxy_id = None
+        self.contact_zabbix_server(payload)
+        response = self.contact_zabbix_server(payload)
+        # NOTE: when '@','#' or other No ASSIC char in name string,
+        # raise 'Invalid Params' error.
+        # Then Replace zabbix proxy name with domain ID
+        # host: domain ID truncated by the first eight
+        if 'error' in response:
+            payload['params']['host'] = domain_id[:8]
+            response = self.contact_zabbix_server(payload)
+            proxy_id = response['result']['proxyids'][0]
+            if 'error' not in response:
+                LOG.info("Success to create a new proxy: %s" % domain_id[:8])
+                self.proxies.append([proxy_id, domain_id])
+            else:
+                LOG.warning("Failed to create a new proxy: %s"
+                            % domain_id[:8])
+        elif response.get('result'):
+            proxy_id = response['result']['proxyids'][0]
+            LOG.info("Success to create a new proxy: %s" % domain_name)
+            self.proxies.append([proxy_id, domain_id])
+
+    def delete_proxy(self, domain_id):
+        for item in self.proxies:
+            if item[1] == domain_id:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "method": "proxy.delete",
+                    "params": [item[0]],
+                    "auth": self.api_auth,
+                    "id": 1
+                }
+                response = self.contact_zabbix_server(payload)
+                if 'result' in response:
+                    LOG.info("Success to delete a new proxy: %s"
+                             % response['result']['proxyids'][0])
+                else:
+                    LOG.warning("Falied to delete a new proxy, error "
+                                "message:%s" % response['error'])
 
     def contact_zabbix_server(self, payload):
         """

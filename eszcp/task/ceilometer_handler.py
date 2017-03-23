@@ -76,24 +76,21 @@ METRIC_CACEHES = {}
 
 class CeilometerHandler:
 
-    def __init__(self, ceilometer_api_port, polling_interval,
-                 template_name, ceilometer_api_host, zabbix_host,
-                 zabbix_port, zabbix_proxy_name, nova_host,
-                 nova_port, admin_tenant_id, keystone_auth):
+    def __init__(self, ceilometer_api_port, ceilometer_api_host,
+                 polling_interval, template_name,  zabbix_host,
+                 zabbix_port, nova_host, nova_port,
+                 admin_project, ks_client):
         """
-        TODO
         :param ceilometer_api_port: ceilometer api port
         :param ceilometer_api_host: ceilometer host
         :param polling_interval:period(seconds) of polling ceilometer metric
         :param template_name:zabbix templete which binds nova instance
         :param zabbix_host: zabbix host
-        :param zabbix_port: zabbix port
-        :param zabbix_proxy_name: zabbix proxy name
         :param nova_host: Openstack compute service, nova-api host
         :param nova_port: Openstack compute service, nova-api port
         :param admin_tenant_id: The admin_tenant of of keystone Default domain
         :param keystone_auth: keystone token_id
-        :no
+        :parms ks_client: keystone client
         """
         self.ceilometer_api_port = ceilometer_api_port
         self.polling_interval = int(polling_interval)
@@ -103,9 +100,9 @@ class CeilometerHandler:
         self.zabbix_port = zabbix_port
         self.nova_host = nova_host
         self.nova_port = nova_port
-        self.zabbix_proxy_name = zabbix_proxy_name
-        self.admin_tenant_id = admin_tenant_id
-        self.keystone_auth = keystone_auth
+        self.keystone_auth = None
+        self.admin_project = admin_project
+        self.ks_client = ks_client
 
     def interval_run(self, func=None):
         """

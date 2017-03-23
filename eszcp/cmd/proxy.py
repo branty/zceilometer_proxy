@@ -33,8 +33,9 @@ from eszcp.common import conf
 from eszcp.task import ceilometer_handler
 from eszcp.task import nova_handler
 from eszcp.task import project_handler
+from eszcp.keystone_client import Client
+from eszcp.nova_client import Client as nova_Client
 from eszcp import messaging
-from eszcp import token_handler
 from eszcp import zabbix_handler
 
 log.initlog()
@@ -48,28 +49,14 @@ def init_zcp(processes):
     """
 
     # Creation of the Auth keystone-dedicated authentication class
-    # Responsible for managing AAA related requests
-    keystone_auth = token_handler.Auth(conf_file.read_option(
-                                        'keystone_authtoken',
-                                        'keystone_host'),
-                                       conf_file.read_option(
-                                        'keystone_authtoken',
-                                        'keystone_public_port'),
-                                       conf_file.read_option(
-                                        'keystone_authtoken',
-                                        'admin_tenant'),
-                                       conf_file.read_option(
-                                        'keystone_authtoken',
-                                        'admin_user'),
-                                       conf_file.read_option(
-                                        'keystone_authtoken',
-                                        'admin_password'))
-
+    # Responsible for managing domain and project related requests
+    ks_client = Client(conf_file)
+    nv_client = nova_Client(conf_file)
     # Creation of the Zabbix Handler class
     # Responsible for the communication with Zabbix
     zabbix_hdl = zabbix_handler.ZabbixHandler(conf_file.read_option(
                                                     'keystone_authtoken',
-                                                    'keystone_admin_port'),
+                                                    'keystone_port'),
                                               conf_file.read_option(
                                                 'nova_configs',
                                                 'nova_port'),
@@ -88,10 +75,8 @@ def init_zcp(processes):
                                               conf_file.read_option(
                                                     'zcp_configs',
                                                     'template_name'),
-                                              conf_file.read_option(
-                                                    'zcp_configs',
-                                                    'zabbix_proxy_name'),
-                                              keystone_auth)
+                                              ks_client,
+                                              nv_client)
 
     # Creation of the Ceilometer Handler class
     # Responsible for the communication with OpenStack's Ceilometer,
@@ -99,30 +84,26 @@ def init_zcp(processes):
     ceilometer_hdl = ceilometer_handler.CeilometerHandler(
                         conf_file.read_option('ceilometer_configs',
                                               'ceilometer_api_port'),
+                        conf_file.read_option('ceilometer_configs',
+                                              'ceilometer_api_host'),
                         conf_file.read_option('zcp_configs',
                                               'polling_interval'),
                         conf_file.read_option('zcp_configs',
                                               'template_name'),
-                        conf_file.read_option('ceilometer_configs',
-                                              'ceilometer_api_host'),
                         conf_file.read_option('zabbix_configs',
                                               'zabbix_host'),
                         conf_file.read_option('zabbix_configs',
                                               'zabbix_port'),
-                        conf_file.read_option('zcp_configs',
-                                              'zabbix_proxy_name'),
                         conf_file.read_option('nova_configs',
                                               'nova_host'),
                         conf_file.read_option('nova_configs',
                                               'nova_port'),
-                        conf_file.read_option('keystone_authtoken',
-                                              'admin_tenant_id'),
-                        keystone_auth)
+                        ks_client, nv_client)
 
     # First run of the Zabbix handler for retrieving the necessary information
     zabbix_hdl.first_run()
 
-    #Create instance about connection of Rabbitmq servers
+    # Create instance about connection of Rabbitmq servers
     connection = messaging.connection()
 
     # Creation of the Nova Handler class
@@ -133,7 +114,8 @@ def init_zcp(processes):
     # Creation of the Project Handler class
     # Responsible for detecting the creation of new tenants in OpenStack,
     # translated then to HostGroups in Zabbix
-    project_hdl = project_handler.ProjectEvents(zabbix_hdl, connection)
+    project_hdl = project_handler.ProjectEvents(
+                        zabbix_hdl, connection, ks_client)
 
     # Create and append processes to process list
     LOG.INFO('**************** Keystone listener started ****************')
