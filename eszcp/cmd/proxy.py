@@ -26,19 +26,20 @@ OpenStack's Nova and RabbitMQ for reflecting changes in
 Projects/Tenants and Instances
 """
 
+import multiprocessing
+
 from eszcp.common import log
 from eszcp.common import conf
 from eszcp.task import ceilometer_handler
 from eszcp.task import nova_handler
 from eszcp.task import project_handler
+from eszcp import messaging
 from eszcp import token_handler
 from eszcp import zabbix_handler
-import multiprocessing
-
 
 log.initlog()
 LOG = log.logger(__name__)
-conf_file = conf.Conf
+conf_file = conf.Conf()
 
 
 def init_zcp(processes):
@@ -121,26 +122,18 @@ def init_zcp(processes):
     # First run of the Zabbix handler for retrieving the necessary information
     zabbix_hdl.first_run()
 
+    #Create instance about connection of Rabbitmq servers
+    connection = messaging.connection()
+
     # Creation of the Nova Handler class
     # Responsible for detecting the creation of new instances in OpenStack,
     # translated then to Hosts in Zabbix
-    nova_hdl = nova_handler.NovaEvents(
-                conf_file.read_option('os_rabbitmq', 'rabbit_host'),
-                conf_file.read_option('os_rabbitmq', 'rabbit_user'),
-                conf_file.read_option('os_rabbitmq', 'rabbit_pass'),
-                conf_file.read_option('os_rabbitmq', 'rabbit_port'),
-                zabbix_hdl,
-                ceilometer_hdl)
+    nova_hdl = nova_handler.NovaEvents(zabbix_hdl, ceilometer_hdl, connection)
 
     # Creation of the Project Handler class
     # Responsible for detecting the creation of new tenants in OpenStack,
     # translated then to HostGroups in Zabbix
-    project_hdl = project_handler.ProjectEvents(
-                conf_file.read_option('os_rabbitmq', 'rabbit_host'),
-                conf_file.read_option('os_rabbitmq', 'rabbit_user'),
-                conf_file.read_option('os_rabbitmq', 'rabbit_pass'),
-                conf_file.read_option('os_rabbitmq', 'rabbit_port'),
-                zabbix_hdl)
+    project_hdl = project_handler.ProjectEvents(zabbix_hdl, connection)
 
     # Create and append processes to process list
     LOG.INFO('**************** Keystone listener started ****************')

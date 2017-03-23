@@ -3,6 +3,7 @@
 #             David Palma,
 #             Luis Cordeiro,
 #             Branty <jun.wang@easystack.cn>
+#             Hanxi Liu<apolloliuhx@gmail.com>
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -25,47 +26,31 @@ Uses the pika library for handling the AMQP protocol, implementing the
 necessary callbacks for Nova events
 """
 
-from eszcp.common import log
 import json
-import pika
+
+from eszcp.common import log
 
 LOG = log.logger(__name__)
 
 
 class NovaEvents:
-
-    def __init__(self, rabbit_host, rabbit_user, rabbit_pass, rabbit_port,
-                 zabbix_handler,
-                 ceilometer_handler):
+    def __init__(self, zabbix_handler, ceilometer_handler, connection):
 
         """
-        :param rabbit_host: rabbit host
-        :param rabbit_user: rabbit user
-        :param rabbit_pass: rabbit user password
         :param zabbix_handler: zabbix api handler
         :param ceilometer_handler: ceilometer api handler
+        :param connection: rabbitmq connection instance
         """
-        self.rabbit_host = rabbit_host
-        self.rabbit_user = rabbit_user
-        self.rabbit_pass = rabbit_pass
-        self.rabbit_port = rabbit_port
         self.zabbix_handler = zabbix_handler
         self.ceilometer_handler = ceilometer_handler
+        self.rabbit_connection = connection
 
     def nova_amq(self):
         """
         Method used to listen to nova events
 
         """
-
-        connection = pika.BlockingConnection(pika.ConnectionParameters(
-                                    host=self.rabbit_host,
-                                    port=int(self.rabbit_port),
-                                    credentials=pika.PlainCredentials(
-                                            self.rabbit_user,
-                                            self.rabbit_pass)
-                                    ))
-        channel = connection.channel()
+        channel = self.rabbit_connection.channel()
         channel.exchange_declare(exchange='nova', type='topic')
         channel.queue_declare(queue="zcp-nova", exclusive=True)
         channel.queue_bind(exchange='nova', queue="zcp-nova",

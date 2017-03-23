@@ -13,14 +13,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
-from eszcp.common.readFile import ReadConfFile
 import logging
 from logging import handlers
 import os
 
+from eszcp.common.conf import Conf
 
-cfg_file = ReadConfFile()
+
+cfg_file = Conf()
 root_level = cfg_file.read_option('log', 'root_level')
 console_level = cfg_file.read_option('log', 'consolo_level')
 log_level = cfg_file.read_option('log', 'log_level')
@@ -53,7 +53,7 @@ class ContextAdapt(object):
 
     def warning(self, msg=None):
         if msg:
-            self.logge.warning(msg)
+            self.logger.warning(msg)
 
     def WARING(self, msg=None):
         self.warning(msg)

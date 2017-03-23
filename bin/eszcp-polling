@@ -9,6 +9,7 @@
 #
 """
 import sys
+
 from eszcp.cmd.proxy import main
 
 if __name__ == "__main__":

@@ -25,10 +25,12 @@ Provides a class responsible for the communication with Zabbix,
 including access to several API methods
 """
 
-from eszcp.common import log
-from eszcp import utils
 import json
 import urllib2
+
+from eszcp.common import log
+from eszcp import utils
+
 
 LOG = log.logger(__name__)
 

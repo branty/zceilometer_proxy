@@ -24,16 +24,17 @@ This class provides means to requests for authentication
 tokens to be used with OpenStack's Ceilometer, Nova and RabbitMQ
 """
 
-from eszcp.common import log
-from eszcp import utils
 import json
 import socket
 import struct
 import time
 import urllib2
 
-LOG = log.logger(__name__)
+from eszcp.common import log
+from eszcp import utils
 
+
+LOG = log.logger(__name__)
 
 INSTANCE_METRICS = [
     'cpu_util',

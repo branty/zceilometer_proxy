@@ -24,11 +24,13 @@ This class provides means to requests for authentication
 tokens to be used with OpenStack's Ceilometer, Nova and RabbitMQ
 """
 
-from eszcp.common import log
 import json
 import urllib2
 from urllib2 import HTTPError
 from urllib2 import URLError
+
+from eszcp.common import log
+
 
 LOG = log.logger(__name__)
 
