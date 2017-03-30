@@ -78,7 +78,7 @@ class CeilometerHandler:
         :param polling_interval:period(seconds) of polling ceilometer metric
         :param template_name:zabbix templete which binds nova instance
         :param zabbix_host: zabbix host
-        :param zabbix_host: zabbix port
+        :param zabbix_port: zabbix port
         :parms ks_client: Openstack identity service, keystone client
         :parms nv_client: Openstack compute service,nova client
         :parms zabbix_hdl:zabbix handler

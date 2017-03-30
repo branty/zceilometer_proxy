@@ -32,7 +32,7 @@ from eszcp.common import log
 from eszcp.common import conf
 from eszcp.task import ceilometer_handler
 from eszcp.task import nova_handler
-from eszcp.task import project_handler
+from eszcp.task import keystone_handler
 from eszcp.keystone_client import Client
 from eszcp.nova_client import Client as nova_Client
 from eszcp import messaging
@@ -55,12 +55,6 @@ def init_zcp(processes):
     # Creation of the Zabbix Handler class
     # Responsible for the communication with Zabbix
     zabbix_hdl = zabbix_handler.ZabbixHandler(conf_file.read_option(
-                                                    'keystone_authtoken',
-                                                    'keystone_port'),
-                                              conf_file.read_option(
-                                                'nova_configs',
-                                                'nova_port'),
-                                              conf_file.read_option(
                                                     'zabbix_configs',
                                                     'zabbix_admin_user'),
                                               conf_file.read_option(
@@ -69,9 +63,6 @@ def init_zcp(processes):
                                               conf_file.read_option(
                                                     'zabbix_configs',
                                                     'zabbix_host'),
-                                              conf_file.read_option(
-                                                    'keystone_authtoken',
-                                                    'keystone_host'),
                                               conf_file.read_option(
                                                     'zcp_configs',
                                                     'template_name'),
@@ -95,17 +86,18 @@ def init_zcp(processes):
 
     # Create instance about connection of Rabbitmq servers
     connection = messaging.connection()
+    channel = connection.channel()
 
     # Creation of the Nova Handler class
     # Responsible for detecting the creation of new instances in OpenStack,
     # translated then to Hosts in Zabbix
-    nova_hdl = nova_handler.NovaEvents(zabbix_hdl, ceilometer_hdl, connection)
+    nova_hdl = nova_handler.NovaEvents(zabbix_hdl, ceilometer_hdl, channel)
 
     # Creation of the Project Handler class
     # Responsible for detecting the creation of new tenants in OpenStack,
     # translated then to HostGroups in Zabbix
-    project_hdl = project_handler.ProjectEvents(
-                        zabbix_hdl, connection, ks_client)
+    project_hdl = keystone_handler.KeystoneEvents(
+                        zabbix_hdl, channel, ks_client)
 
     # Create and append processes to process list
     LOG.INFO('**************** Keystone listener started ****************')

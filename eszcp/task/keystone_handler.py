@@ -34,22 +34,23 @@ from eszcp.common import log
 LOG = log.logger(__name__)
 
 
-class ProjectEvents:
-    def __init__(self, zabbix_handler, connection, ks_client):
+class KeystoneEvents:
+
+    def __init__(self, zabbix_handler, channel, ks_client):
         """
         :param zabbix_handler: zabbix api handler
-        :param connection: rabbitmq connection instance
+        :param connection: rabbitmq channel instance
         :param ks_client: keystone client
         """
         self.zabbix_handler = zabbix_handler
         self.ks_client = ks_client
-        self.rabbit_connection = connection
+        self.rabbit_channel = channel
 
     def keystone_amq(self):
         """
         Method used to listen to keystone events
         """
-        channel = self.rabbit_connection.channel()
+        channel = self.rabbit_channel
         channel.exchange_declare(exchange='keystone', type='topic')
         channel.queue_declare(queue="zcp-keystone", exclusive=True)
         channel.queue_bind(exchange='keystone',
@@ -63,13 +64,14 @@ class ProjectEvents:
     def _handler_events(self, payload):
         if payload['event_type'] == 'identity.project.created':
             tenant_id = payload['payload']['resource_info']
-            tenants = self.zabbix_handler.get_tenants()
-            tenant_name = self.zabbix_handler.get_tenant_name(tenants,
-                                                              tenant_id)
+            project = self.ks_client.get_project(tenant_id)
             LOG.info("Creating a hostgroup: %s(%s) in Zabbix Server"
-                     % (tenant_id, tenant_name))
-            self.zabbix_handler.group_list.append([tenant_name, tenant_id])
-            self.zabbix_handler.create_host_group(tenant_name)
+                     % (tenant_id, project.name))
+            self.zabbix_handler.create_host_group(project.name)
+            self.zabbix_handler.group_list.append([project.name,
+                                                   tenant_id,
+                                                   project.domain_id])
+
         elif payload['event_type'] == 'identity.project.deleted':
             tenant_id = payload['payload']['resource_info']
             LOG.info("Deleting a hostgroup: %s in Zabbix Server"
@@ -106,6 +108,5 @@ class ProjectEvents:
         payload = json.loads(body)
         try:
             self._handler_events(payload)
-        except Exception, ex:
-            LOG.error(ex.message)
-            raise
+        except Exception as ex:
+            LOG.error(ex)

@@ -3,6 +3,7 @@
 #             David Palma,
 #             Luis Cordeiro,
 #             Branty <jun.wang@easystack.cn>
+#             Hanxi Liu<apolloliuhx@gmail.com>
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -29,7 +30,9 @@ import json
 import urllib2
 
 from eszcp.common import log
+from eszcp import exceptions
 from eszcp import utils
+
 
 LOG = log.logger(__name__)
 
@@ -47,16 +50,21 @@ def logged(func):
 
 
 class ZabbixHandler:
-    def __init__(self, keystone_admin_port, compute_port, admin_user,
-                 zabbix_admin_pass, zabbix_host, keystone_host,
+    def __init__(self, zabbix_admin_user,
+                 zabbix_admin_pass, zabbix_host,
                  template_name, ks_client, nv_client):
-
-        self.keystone_admin_port = keystone_admin_port
-        self.compute_port = compute_port
-        self.zabbix_admin_user = admin_user
+        """
+        :param zabbix_user: zabbix admin user
+        :param zabbix_pass: zabbix admin password
+        :param zabbix_pass: zabbix host ip
+        :param template_name:zabbix templete which binds nova instance
+        :parms ks_client: Openstack identity service, keystone client
+        :parms nv_client: Openstack compute service,nova client
+        :parms zabbix_hdl:zabbix handler
+        """
+        self.zabbix_admin_user = zabbix_admin_user
         self.zabbix_admin_pass = zabbix_admin_pass
         self.zabbix_host = zabbix_host
-        self.keystone_host = keystone_host
         self.template_name = template_name
         self.ks_client = ks_client
         self.nv_client = nv_client
@@ -90,83 +98,6 @@ class ZabbixHandler:
             raise
         zabbix_auth = response['result']
         return zabbix_auth
-
-    def create_template(self, group_id):
-        """
-        Method used to create a template.
-
-        :param group_id: Receives the template group id
-        :return:   returns the template id
-        """
-        LOG.info("Creating Template and items")
-        payload = {"jsonrpc": "2.0",
-                   "method": "template.create",
-                   "params": {
-                       "host": self.template_name,
-                       "groups": {
-                           "groupid": group_id
-                       }
-                   },
-                   "auth": self.api_auth,
-                   "id": 1
-                   }
-        response = self.contact_zabbix_server(payload)
-        template_id = response['result']['templateids'][0]
-        self.create_items(template_id)
-        return template_id
-
-    def create_items(self, template_id):
-        """
-        Method used to create the items for measurements regarding the template
-        :param template_id: receives the template id
-        """
-        items_list = ['cpu_util',
-                      'cpu.delta',
-                      'memory.usage',
-                      'disk.read.bytes.rate',
-                      'disk.write.bytes.rate',
-                      'disk.write.requests.rate',
-                      'disk.read.requests.rate',
-                      'network.incoming.bytes.rate',
-                      'network.incoming.packets.rate',
-                      'network.outgoing.bytes.rate',
-                      'network.outgoing.packets.rate']
-        for item in items_list:
-            if item == 'cpu':
-                value_type = 3
-            else:
-                value_type = 0
-            payload = self.define_item(template_id, item, value_type)
-            self.contact_zabbix_server(payload)
-
-    def define_item(self, template_id, item, value_type):
-        """
-        Method used to define the items parameters
-
-        :param template_id:
-        :param item:
-        :param value_type:
-        :return: returns the json message to send to zabbix API
-        """
-        payload = {"jsonrpc": "2.0",
-                   "method": "item.create",
-                   "params": {
-                       "name": item,
-                       "key_": item,
-                       "hostid": template_id,
-                       "type": 2,
-                       "value_type": value_type,
-                       "history": "90",
-                       "trends": "365",
-                       "units": "",
-                       "formula": "1",
-                       "lifetime": "30",
-                       "delay": 10
-                   },
-                   "auth": self.api_auth,
-                   "id": 1}
-
-        return payload
 
     @logged
     def check_proxies(self):
@@ -420,7 +351,6 @@ class ZabbixHandler:
     def find_proxy_id(self, domain_id):
         """
         Method used to find the the proxy id of an host in Zabbix server
-
         :param domain_name: refers to the domain name
         :param domain_id: refers to the domain id
         :return: returns the proxy id that belongs to the zabbix proxy
@@ -460,13 +390,16 @@ class ZabbixHandler:
         :return: returns the template ID
         """
         global template_id
+        template_id = None
         payload = {
             "jsonrpc": "2.0",
             "method": "template.get",
             "params": {
                 "output": "extend",
                 "filter": {
-                    "host": [self.template_name]
+                    "host": [
+                        self.template_name
+                    ]
                 }
             },
             "auth": self.api_auth,
@@ -474,41 +407,14 @@ class ZabbixHandler:
         }
         response = self.contact_zabbix_server(payload)
 
-        if response.get('result', []):
-            global template_id
+        if len(response['result']) > 0:
             for item in response['result']:
                 template_id = item['templateid']
         else:
-            group_id = self.get_group_template_id()
-            template_id = self.create_template(group_id)
+            message = ("Can't find default template in zabbix. "
+                       "Please import the default template!")
+            raise exceptions.TemplateNotFound(message)
         return template_id
-
-    def get_group_template_id(self):
-        """
-        Method used to get the the group template id.
-        Used to associate a template to the templates group.
-
-        :return: returns the template group id
-        """
-        group_template_id = None
-        payload = {"jsonrpc": "2.0",
-                   "method": "hostgroup.get",
-                   "params": {
-                       "output": "extend",
-                       "filter": {
-                           "name": [
-                               "Templates"
-                           ]
-                       }
-                   },
-                   "auth": self.api_auth,
-                   "id": 1
-                   }
-        response = self.contact_zabbix_server(payload)
-
-        for item in response['result']:
-            group_template_id = item['groupid']
-        return group_template_id
 
     def find_host_id(self, host):
         """
@@ -549,20 +455,6 @@ class ZabbixHandler:
                    }
         self.contact_zabbix_server(payload)
 
-    def get_tenant_name(self, tenants, tenant_id):
-        """
-        Method used to get a name of a tenant using its id
-
-        :param tenants: refers to an array of tenants
-        :param tenant_id: refers to a tenant id
-        :return: returns a tenant name
-        """
-        for item in tenants['tenants']:
-            if item['id'] == tenant_id:
-                global tenant_name
-                tenant_name = item['name']
-        return tenant_name
-
     def host_group_list(self, tenants):
         """
         Method to "fill" an array of hosts
@@ -592,7 +484,7 @@ class ZabbixHandler:
         for item in self.group_list:
             if item[1] == tenant_id:
                 tenant_name = item[0]
-                group_id = self.find_group_id(tenant_name)
+                group_id = self.find_group_id(tenant_name,tenant_id)
                 self.delete_host_group(group_id)
                 self.group_list.remove(item)
 
@@ -613,7 +505,7 @@ class ZabbixHandler:
         """
         This method is used to create host_groups. Every tenant is a host group
 
-        :param tenant_name: receives teh tenant name
+        :param tenant_name: receives keystone tenant name
         """
         payload = {"jsonrpc": "2.0",
                    "method": "hostgroup.create",
@@ -650,13 +542,14 @@ class ZabbixHandler:
         if 'error' in response:
             payload['params']['host'] = domain_id[:8]
             response = self.contact_zabbix_server(payload)
-            proxy_id = response['result']['proxyids'][0]
             if 'error' not in response:
+                proxy_id = response['result']['proxyids'][0]
                 LOG.info("Success to create a new proxy: %s" % domain_id[:8])
                 self.proxies.append([proxy_id, domain_id])
             else:
-                LOG.warning("Failed to create a new proxy: %s"
-                            % domain_id[:8])
+                LOG.warning("Failed to create a new proxy: %s,"
+                            "error message: %s" % (domain_id[:8],
+                                                   response['error']))
         elif response.get('result'):
             proxy_id = response['result']['proxyids'][0]
             LOG.info("Success to create a new proxy: %s" % domain_name)
@@ -679,6 +572,7 @@ class ZabbixHandler:
                 else:
                     LOG.warning("Falied to delete a new proxy, error "
                                 "message:%s" % response['error'])
+                self.proxies.remove(item)
 
     def get_items_by_template(self):
         """This method find all items in specified template

@@ -92,3 +92,7 @@ class Client(object):
             return self.domain_keystone.projects.list(domain=domain_id)
         else:
             return self.domain_keystone.projects.list()
+
+    @logged
+    def get_project(self, project_id):
+        return self.domain_keystone.projects.get(project_id)
