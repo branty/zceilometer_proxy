@@ -35,23 +35,23 @@ LOG = log.logger(__name__)
 
 
 class NovaEvents:
-    def __init__(self, zabbix_handler, ceilometer_handler, connection):
+    def __init__(self, zabbix_handler, ceilometer_handler, channel):
 
         """
         :param zabbix_handler: zabbix api handler
         :param ceilometer_handler: ceilometer api handler
-        :param connection: rabbitmq connection instance
+        :param connection: rabbitmq channel instance
         """
         self.zabbix_handler = zabbix_handler
         self.ceilometer_handler = ceilometer_handler
-        self.rabbit_connection = connection
+        self.rabbit_channel = channel
 
     def nova_amq(self):
         """
         Method used to listen to nova events
 
         """
-        channel = self.rabbit_connection.channel()
+        channel = self.rabbit_channel
         channel.exchange_declare(exchange='nova', type='topic')
         channel.queue_declare(queue="zcp-nova", exclusive=True)
         channel.queue_bind(exchange='nova', queue="zcp-nova",

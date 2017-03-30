@@ -3,6 +3,7 @@
 #             David Palma,
 #             Luis Cordeiro,
 #             Branty <jun.wang@easystack.cn>
+#             Hanxi Liu<apolloliuhx@gmail.com>
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -29,7 +30,9 @@ import json
 import urllib2
 
 from eszcp.common import log
+from eszcp import exceptions
 from eszcp import utils
+
 
 LOG = log.logger(__name__)
 
@@ -90,83 +93,6 @@ class ZabbixHandler:
             raise
         zabbix_auth = response['result']
         return zabbix_auth
-
-    def create_template(self, group_id):
-        """
-        Method used to create a template.
-
-        :param group_id: Receives the template group id
-        :return:   returns the template id
-        """
-        LOG.info("Creating Template and items")
-        payload = {"jsonrpc": "2.0",
-                   "method": "template.create",
-                   "params": {
-                       "host": self.template_name,
-                       "groups": {
-                           "groupid": group_id
-                       }
-                   },
-                   "auth": self.api_auth,
-                   "id": 1
-                   }
-        response = self.contact_zabbix_server(payload)
-        template_id = response['result']['templateids'][0]
-        self.create_items(template_id)
-        return template_id
-
-    def create_items(self, template_id):
-        """
-        Method used to create the items for measurements regarding the template
-        :param template_id: receives the template id
-        """
-        items_list = ['cpu_util',
-                      'cpu.delta',
-                      'memory.usage',
-                      'disk.read.bytes.rate',
-                      'disk.write.bytes.rate',
-                      'disk.write.requests.rate',
-                      'disk.read.requests.rate',
-                      'network.incoming.bytes.rate',
-                      'network.incoming.packets.rate',
-                      'network.outgoing.bytes.rate',
-                      'network.outgoing.packets.rate']
-        for item in items_list:
-            if item == 'cpu':
-                value_type = 3
-            else:
-                value_type = 0
-            payload = self.define_item(template_id, item, value_type)
-            self.contact_zabbix_server(payload)
-
-    def define_item(self, template_id, item, value_type):
-        """
-        Method used to define the items parameters
-
-        :param template_id:
-        :param item:
-        :param value_type:
-        :return: returns the json message to send to zabbix API
-        """
-        payload = {"jsonrpc": "2.0",
-                   "method": "item.create",
-                   "params": {
-                       "name": item,
-                       "key_": item,
-                       "hostid": template_id,
-                       "type": 2,
-                       "value_type": value_type,
-                       "history": "90",
-                       "trends": "365",
-                       "units": "",
-                       "formula": "1",
-                       "lifetime": "30",
-                       "delay": 10
-                   },
-                   "auth": self.api_auth,
-                   "id": 1}
-
-        return payload
 
     @logged
     def check_proxies(self):
@@ -457,13 +383,16 @@ class ZabbixHandler:
         :return: returns the template ID
         """
         global template_id
+        template_id = None
         payload = {
             "jsonrpc": "2.0",
             "method": "template.get",
             "params": {
                 "output": "extend",
                 "filter": {
-                    "host": [self.template_name]
+                    "host": [
+                        self.template_name
+                    ]
                 }
             },
             "auth": self.api_auth,
@@ -471,41 +400,14 @@ class ZabbixHandler:
         }
         response = self.contact_zabbix_server(payload)
 
-        if response.get('result', []):
-            global template_id
+        if len(response['result']) > 0:
             for item in response['result']:
                 template_id = item['templateid']
         else:
-            group_id = self.get_group_template_id()
-            template_id = self.create_template(group_id)
+            message = ("Can't find default template in zabbix. "
+                       "Please import the default template!")
+            raise exceptions.TemplateNotFound(message)
         return template_id
-
-    def get_group_template_id(self):
-        """
-        Method used to get the the group template id.
-        Used to associate a template to the templates group.
-
-        :return: returns the template group id
-        """
-        group_template_id = None
-        payload = {"jsonrpc": "2.0",
-                   "method": "hostgroup.get",
-                   "params": {
-                       "output": "extend",
-                       "filter": {
-                           "name": [
-                               "Templates"
-                           ]
-                       }
-                   },
-                   "auth": self.api_auth,
-                   "id": 1
-                   }
-        response = self.contact_zabbix_server(payload)
-
-        for item in response['result']:
-            group_template_id = item['groupid']
-        return group_template_id
 
     def find_host_id(self, host):
         """
