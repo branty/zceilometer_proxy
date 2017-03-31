@@ -82,23 +82,13 @@ def init_zcp(processes):
     # Responsible for the communication with OpenStack's Ceilometer,
     # polling for changes every N seconds
     ceilometer_hdl = ceilometer_handler.CeilometerHandler(
-                        conf_file.read_option('ceilometer_configs',
-                                              'ceilometer_api_port'),
-                        conf_file.read_option('ceilometer_configs',
-                                              'ceilometer_api_host'),
                         conf_file.read_option('zcp_configs',
                                               'polling_interval'),
-                        conf_file.read_option('zcp_configs',
-                                              'template_name'),
                         conf_file.read_option('zabbix_configs',
                                               'zabbix_host'),
                         conf_file.read_option('zabbix_configs',
                                               'zabbix_port'),
-                        conf_file.read_option('nova_configs',
-                                              'nova_host'),
-                        conf_file.read_option('nova_configs',
-                                              'nova_port'),
-                        ks_client, nv_client)
+                        ks_client, nv_client, zabbix_hdl)
 
     # First run of the Zabbix handler for retrieving the necessary information
     zabbix_hdl.first_run()

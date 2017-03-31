@@ -102,6 +102,7 @@ class ZabbixHandler:
 
         :return: a control value and those proxies if exists
         """
+        cache_proxy = {}
         payload = {
             "jsonrpc": "2.0",
             "method": "proxy.get",
@@ -114,6 +115,8 @@ class ZabbixHandler:
         # return all proxies in zabbix
         response = self.contact_zabbix_server(payload)
         proxies = [proxy['host'] for proxy in response['result']]
+        for proxy in response['result']:
+            cache_proxy[proxy['host']] = proxy['proxyid']
         # return all domains in keystone
         domains = [domain for domain in self.ks_client.get_domains()]
         # each item in current_proxies:[proxy_id,domain_id]
@@ -136,7 +139,7 @@ class ZabbixHandler:
                 '''
                 # host: domain ID truncated by the first eight
                 if domain.id[:8] in proxies:
-                    current_proxies.append([domain.id[:6],
+                    current_proxies.append([cache_proxy[domain.id[:8]],
                                             domain.id])
                     continue
                 LOG.info("%s is not in zabbix proxies, starting to create a "
@@ -153,7 +156,7 @@ class ZabbixHandler:
                 LOG.info("%s is not in zabbix proxies, success to create a "
                          "new proxy mapping to keystone domain" % domain.name)
             else:
-                current_proxies.append([domain.name, domain.id])
+                current_proxies.append([[cache_proxy[domain.name]], domain.id])
         return current_proxies
 
     @logged
@@ -201,7 +204,7 @@ class ZabbixHandler:
             else:
                 LOG.info("Already exists a new hostgroup: %s, "
                          "zabbix hostgroup mapping to keystone project."
-                         % payload['params']['name'])
+                         % item[0])
 
     @logged
     def check_instances(self):
@@ -578,6 +581,116 @@ class ZabbixHandler:
                 else:
                     LOG.warning("Falied to delete a new proxy, error "
                                 "message:%s" % response['error'])
+
+    def get_items_by_template(self):
+        """This method find all items in specified template
+        :return : a list stored all metric items
+        """
+        template_id = self.get_template_id()
+        payload = {"jsonrpc": "2.0",
+                   "method": "item.get",
+                   "params": {"output": "extend",
+                              "templateids": [template_id]},
+                   "auth": self.api_auth,
+                   "id": 1
+                   }
+        response = self.contact_zabbix_server(payload)
+        if 'error' in response:
+            return []
+        else:
+            return [item['name'] for item in response['result']]
+
+    def get_hosts_by_proxy(self, proxy_id=None):
+        """This method find all hosts in specified proxy
+        :return : a dict stored all hosts
+        """
+        hosts = {}
+        # proxy_name is not None,find all hosts in the specified proxy
+        if proxy_id:
+            payload = {"jsonrpc": "2.0",
+                       "method": "host.get",
+                       "params": {"output": "extend",
+                                  "proxyids": [proxy_id]},
+                       "auth": self.api_auth,
+                       "id": 1
+                       }
+            response = self.contact_zabbix_server(payload)
+            if 'error' not in response:
+                hosts = {proxy_id: response['result']}
+        else:
+            for i in self.proxies:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "method": "host.get",
+                    "params": {"output": "extend",
+                               "proxyids": [i[0]]},
+                    "auth": self.api_auth,
+                    "id": 1
+                   }
+                response = self.contact_zabbix_server(payload)
+                hosts[i[0]] = [(host['host'], host['hostid'], host['name'])
+                               for host in response['result']]
+        return hosts
+
+    def get_hosts(self, filter_no_proxy=False):
+        """Method used do query Zabbix API in order to fill an Array of hosts
+
+        :params filter_no_proxy: get all hosts whose proxy_hostid is not '0'
+        :return: returns a dict and a list ,record zabbix host information.
+        hosts_cache, the date structure is the following:
+         {"instance_id":["host_id","host_name","proxy_id"]
+         }
+        hosts: ['instance_id1','instance)id2',...]
+        """
+        hosts = []
+        hosts_cache = {}
+        payload = {
+                    "jsonrpc": "2.0",
+                    "method": "host.get",
+                    "params": {"output": "extend"},
+                    "auth": self.api_auth,
+                    "id": 1
+        }
+        response = self.contact_zabbix_server(payload)
+        if 'error' in response:
+            LOG.warning("Falied to get all zabbix hosts, error "
+                        "message:%s" % response['error'])
+            return []
+        # Get hosts monitoring the zabbix proxy
+        if filter_no_proxy:
+            for host in response['result']:
+                if int(host['proxy_hostid']):
+                    hosts.append(host['host'])
+                    hosts_cache[host['host']] = [host['hostid'],
+                                                 host['name'],
+                                                 host['proxy_hostid']]
+        else:
+            for host in response['result']:
+                hosts.append(host['host'])
+                hosts_cache[host['host']] = [host['hostid'],
+                                             host['name'],
+                                             host['proxy_hostid']]
+        return hosts, hosts_cache
+
+    def get_by_proxyid(self, proxy_id):
+        """
+        :param proxy_id: refs to proxy id
+        """
+        payload = {
+                    "jsonrpc": "2.0",
+                    "method": "proxy.get",
+                    "params": {"output": "extend",
+                               "proxyids": proxy_id},
+                    "auth": self.api_auth,
+                    "id": 1
+        }
+        response = self.contact_zabbix_server(payload)
+        if 'error' in response:
+            LOG.error("Falied to find proxy : %s" % proxy_id)
+        elif len(response['result']) == 0:
+            LOG.warning("Can't find proxy : %s" % proxy_id)
+        else:
+            return response['result'][0]
 
     def contact_zabbix_server(self, payload):
         """

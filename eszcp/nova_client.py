@@ -16,16 +16,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""
-Class for requesting authentication tokens to Keystone
-
-This class provides means to requests for authentication
-
-tokens to be used with OpenStack's Ceilometer, Nova and RabbitMQ
-
-and query requirements for keystone projects and domains
-"""
-
 import functools
 from novaclient import client as nova_client
 from novaclient import exceptions
@@ -46,12 +36,15 @@ def logged(func):
             msg = "Error... \nToken refused! " \
                   "The request you have made requires authentication."
             LOG.error(msg)
+            raise
         except exceptions.NotFound, e:
             LOG.error("Not Found Nova Resource")
+            raise
         except Exception, ex:
-            msg = hasattr(ex, 'message', None) or \
-                  hasattr(ex, 'msg', '')
+            msg = getattr(ex, 'message', None) or \
+                  getattr(ex, 'msg', '')
             LOG.error(msg)
+            raise
     return with_logging
 
 

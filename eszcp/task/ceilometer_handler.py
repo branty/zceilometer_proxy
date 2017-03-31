@@ -32,7 +32,7 @@ import urllib2
 
 from eszcp.common import log
 from eszcp import utils
-
+from eszcp.ceilometer_client import Client as CeiloV20
 
 LOG = log.logger(__name__)
 
@@ -45,13 +45,6 @@ INSTANCE_METRICS = [
     'disk.write.bytes.rate',
     'disk.write.requests.rate'
     ]
-# Disk device metric needed in the future
-# DISK_METRICS = [
-#    'disk.device.read.bytes.rate',
-#    'disk.device.read.requests.rate',
-#    'disk.device.write.bytes.rate',
-#    'disk.device.write.requests.rate'
-#    ]
 
 NETWORK_METRICS = [
     'network.incoming.bytes.rate',
@@ -76,33 +69,27 @@ METRIC_CACEHES = {}
 
 class CeilometerHandler:
 
-    def __init__(self, ceilometer_api_port, ceilometer_api_host,
-                 polling_interval, template_name,  zabbix_host,
-                 zabbix_port, nova_host, nova_port,
-                 admin_project, ks_client):
-        """
+    def __init__(self, polling_interval, zabbix_host, zabbix_port,
+                 ks_client, nv_client, zabbix_hdl):
+        """Ceilometer polling handler
+
         :param ceilometer_api_port: ceilometer api port
         :param ceilometer_api_host: ceilometer host
         :param polling_interval:period(seconds) of polling ceilometer metric
         :param template_name:zabbix templete which binds nova instance
         :param zabbix_host: zabbix host
-        :param nova_host: Openstack compute service, nova-api host
-        :param nova_port: Openstack compute service, nova-api port
-        :param admin_tenant_id: The admin_tenant of of keystone Default domain
-        :param keystone_auth: keystone token_id
-        :parms ks_client: keystone client
+        :param zabbix_host: zabbix port
+        :parms ks_client: Openstack identity service, keystone client
+        :parms nv_client: Openstack compute service,nova client
+        :parms zabbix_hdl:zabbix handler
         """
-        self.ceilometer_api_port = ceilometer_api_port
         self.polling_interval = int(polling_interval)
-        self.template_name = template_name
-        self.ceilometer_api_host = ceilometer_api_host
         self.zabbix_host = zabbix_host
         self.zabbix_port = zabbix_port
-        self.nova_host = nova_host
-        self.nova_port = nova_port
-        self.keystone_auth = None
-        self.admin_project = admin_project
         self.ks_client = ks_client
+        self.nv_client = nv_client
+        self.zabbix_hdl = zabbix_hdl
+        self.clt_client = CeiloV20()
 
     def interval_run(self, func=None):
         """
@@ -114,132 +101,10 @@ class CeilometerHandler:
             time.sleep(self.polling_interval)
 
     def run(self):
-        self.token = self.keystone_auth.getToken()
-        # Timer(self.polling_interval, self.run, ()).start()
-        host_list = self.get_hosts_ID()
-        self.update_zabbix_values(host_list)
-
-    def get_hosts_ID(self):
-        """
-        Method used do query Zabbix API in order to fill an Array of hosts
-        :return: returns a array of servers and items to monitor by server
-        """
-        data = {"request": "proxy config", "host": self.zabbix_proxy_name}
-        payload = self.set_proxy_header(data)
-        response = self.connect_zabbix(payload)
-        hosts_id = []
-        items = []
-        for line in response['hosts']['data']:
-            for line2 in response['items']['data']:
-                if line2[4] == line[0]:
-                    items.append(line2[5])
-            hosts_id.append([line[0], line[1], items, line[7]])
-            items = []
-        return hosts_id
-
-    def update_values(self, hosts_id):
-        """
-        :param hosts_id: nova instance uuid
-        For Upstream OpenStack community, use this function
-
-        For EasyStack Ceilometer, this function is deprecated
-        Use the function of update_zabbix_values
-        """
-        for host in hosts_id:
-            links = []
-            if not host[1] == self.template_name:
-
-                LOG.debug("Checking host:" + host[3])
-                # Get links for instance compute metrics
-                request = urllib2.urlopen(urllib2.Request(
-                    "http://" + self.ceilometer_api_host + ":" +
-                    self.ceilometer_api_port +
-                    "/v2/resources?q.field=resource_id&q.value=" + host[1],
-                    headers={"Accept": "application/json",
-                             "Content-Type": "application/json",
-                             "X-Auth-Token": self.token})).read()
-                # Filter the links to an array
-                for line in json.loads(request):
-                    for line2 in line['links']:
-                        if line2['rel'] in ('cpu_util',
-                                            'memory.usage',
-                                            'disk.read.bytes',
-                                            'disk.read.requests',
-                                            'disk.write.bytes',
-                                            'disk.write.requests',
-                                            'disk.device.read.bytes',
-                                            'disk.device.read.requests',
-                                            'disk.device.write.bytes',
-                                            'disk.device.write.requests',
-                                            'volume.read.bytes',
-                                            'volume.write.bytes'
-                                            ):
-                            links.append(line2)
-
-                # Get the links regarding network metrics
-                request = urllib2.urlopen(urllib2.Request(
-                    "http://" + self.ceilometer_api_host +
-                    ":" + self.ceilometer_api_port +
-                    "/v2/resources?q.field=metadata.instance_id&q.value=" +
-                    host[1],
-                    headers={"Accept": "application/json",
-                             "Content-Type": "application/json",
-                             "X-Auth-Token": self.token})).read()
-
-                # Add more links to the array
-                for line in json.loads(request):
-                    for line2 in line['links']:
-                        if line2['rel'] in ('network.incoming.bytes',
-                                            'network.incoming.packets',
-                                            'network.outgoing.bytes',
-                                            'network.outgoing.packets'):
-                            links.append(line2)
-
-                # Query ceilometer API using the array of links
-                for line in links:
-                    self.query_ceilometer(host[1], line['rel'], line['href'])
-                    LOG.info("  - Item " + line['rel'])
-
-    def query_ceilometer(self, resource_id, item_key, link):
-        """
-        :param resource_id: host_id
-        :param item_key: zabbix metric
-        :param link:
-        """
-        try:
-            # global contents
-            contents = urllib2.urlopen(urllib2.Request(
-                    link + str("&limit=1"),
-                    headers={"Accept": "application/json",
-                             "Content-Type": "application/json",
-                             "X-Auth-Token": self.token})).read()
-            response = json.loads(contents)
-
-            counter_volume = response[0]['counter_volume']
-            LOG.debug("Start sending resource_id: %s, metric: %s"
-                      % (resource_id, item_key))
-            self.send_data_zabbix(counter_volume, resource_id, item_key)
-        except urllib2.HTTPError, e:
-            if e.code == 401:
-                msg = "Error... \nToken refused! " \
-                      "The request you have made requires authentication."
-                LOG.error(msg)
-                raise
-            elif e.code == 404:
-                msg = "Can't found for resource_id: %s, metric: %s " \
-                      % (resource_id, item_key)
-                LOG.error()
-                raise
-            elif e.code == 503:
-                msg = "HTTP Error 503,The service of ceilometer is unavailable"
-                LOG.error(msg)
-                raise
-            else:
-                LOG.error("Unknown Error")
-                raise
-        except Exception, ex:
-            LOG.error(ex.message)
-            raise
+        hosts, hosts_map = self.zabbix_hdl.get_hosts(filter_no_proxy=True)
+        # self.zabbix_hdl.check_host_groups()
+        # self.zabbix_hdl.check_proxies()
+        self.update_zabbix_values(hosts, hosts_map)
 
     def connect_zabbix(self, payload):
         """
@@ -268,7 +133,7 @@ class CeilometerHandler:
 
         return response
 
-    def update_zabbix_values(self, hosts_id):
+    def update_zabbix_values(self, hosts, hosts_map):
         """
         For ES metric collecor,
         We don't storage sample in a same collection meter(
@@ -276,69 +141,42 @@ class CeilometerHandler:
 
         Accroding to the sample period,slice the meter collection
         and collector metric
-        :param hosts_id: hosts in zabbix ,host_id is nova instance uuid
+        :param hosts: a list ,record zabbix host information.
+        :param hosts_cache:a dict ,record zabbix host information.
+         hosts_cache, the date structure is the following:
+         {"instance_id":["host_id","host_name","proxy_id"]
+         }
+        hosts: ['instance_id1','instance)id2',...]
         """
         def _all_instance_details():
-            try:
-                request = urllib2.urlopen(urllib2.Request(
-                    "http://" + self.nova_host + ":" + self.nova_port +
-                    "/v2/" + self.admin_tenant_id +
-                    "/servers/detail?all_tenants=1",
-                    headers={"Accept": "application/json",
-                             "Content-Type": "application/json",
-                             "X-Auth-Token": self.token}
-                )).read()
-                return json.loads(request).get("servers")
-            except urllib2.HTTPError, e:
-                if e.code == 401:
-                    msg = "Error... \nToken refused! " \
-                          "The request you have made requires authentication."
-                    LOG.error(msg)
-                    raise
-                elif e.code == 404:
-                    msg = "Can't found for instances for tenant: %s " \
-                           % self.admin_tenant_id
-                    LOG.error(msg)
-                    raise
-                elif e.code == 503:
-                    msg = "HTTP Error 503,The service of " \
-                          "ceilometer is unavailable"
-                    LOG.error(msg)
-                    raise
-                else:
-                    LOG.error("Unknown Error")
-                    raise
-            except Exception, ex:
-                LOG.error(ex.message)
-                raise
-        All_INSTANCES = _all_instance_details() or []
-        # Get all instance in zabbix recored
-        ZBX_HOSTS = [host[1] for host in hosts_id]
-        for instance in All_INSTANCES:
-            if instance['id'] in ZBX_HOSTS and utils.is_active(instance):
-                LOG.debug("Start Checking host : " + host[3])
-                # Get links for instance compute metrics
-                request = urllib2.urlopen(urllib2.Request(
-                    "http://" + self.ceilometer_api_host +
-                    ":" + self.ceilometer_api_port +
-                    "/v2/resources?q.field=metadata.instance_id&q.value=" +
-                    host[1],
-                    headers={"Accept": "application/json",
-                             "Content-Type": "application/json",
-                             "X-Auth-Token": self.token})).read()
-                resources = json.loads(request)
+            response = self.nv_client.instance_get_all()
+            servers = [server.to_dict() for server in response]
+            if not servers:
+                LOG.warning("Servers list is empry,"
+                            "skip to update zabbix values")
+            return servers
 
+        All_INSTANCES = _all_instance_details() or []
+        for instance in All_INSTANCES:
+            if instance['id'] in hosts and utils.is_active(instance):
+                LOG.debug("Start Checking host : %s"
+                          % hosts_map[instance['id']][1])
+                # Get links for instance compute metrics
+                query = [{'op': 'eq',
+                          'value': instance['id'],
+                          'field': 'metadata.instance_id'}]
+                resources = self.clt_client.list_resources(q=query)
                 # Add a new instance and its metrics
                 if instance['id'] not in METRIC_CACEHES.keys():
                     rs_items = {}
                     for rs in resources:
-                        if rs['resource_id'].startswith('instance'):
-                            rs_items[rs['resource_id']] = NETWORK_METRICS
+                        if rs.resource_id.startswith('instance'):
+                            rs_items[rs.resource_id] = NETWORK_METRICS
                         # NOTE:remove disk metrics
-                        elif utils.endswith_words(rs['resource_id']):
+                        elif utils.endswith_words(rs.resource_id):
                             pass
                         else:
-                            rs_items[rs['resource_id']] = INSTANCE_METRICS
+                            rs_items[rs.resource_id] = INSTANCE_METRICS
                     METRIC_CACEHES[instance['id']] = rs_items
                 # Update metric_caches where instance_in exists.For the case:
                 # instance add/remove a nic
@@ -347,21 +185,32 @@ class CeilometerHandler:
                     rs_items = METRIC_CACEHES[instance['id']]
                     rs_item_keys = rs_items.keys()
                     for rs in resources:
-                        if rs['resource_id'] not in rs_item_keys and \
-                           rs['resource_id'].startswith('instance'):
-                            rs_items[rs['resource_id']] = NETWORK_METRICS
+                        if rs.resource_id not in rs_item_keys and \
+                           rs.resource_id.startswith('instance'):
+                            rs_items[rs.resource_id] = NETWORK_METRICS
                             METRIC_CACEHES[instance['id']] = rs_items
                         # NOTE:remove disk metrics
-                        elif rs['resource_id'] not in rs_item_keys and \
-                                utils.endswith_words(rs['resource_id']):
+                        elif rs.resource_id not in rs_item_keys and \
+                                utils.endswith_words(rs.resource_id):
                             pass
                         else:
                             continue
                 LOG.debug("Starting to polling %s(%s) metric into zabbix"
                           % (instance.get('name'), instance.get('id')))
-                # Polling Ceilometer the latest samplei into zabbix
+                pxy = self.zabbix_hdl.get_by_proxyid(
+                                hosts_map[instance['id']][2])
+                if pxy:
+                    proxy_name = pxy['host']
+                else:
+                    LOG.warning("Can't find the prxoy:%s,Skip to polling "
+                                "instance_id  %s metrics."
+                                % (hosts_map[instance['id']][2],
+                                   instance['id']))
+                    continue
+                # Polling Ceilometer the latest sample into zabbix
                 # CLI:ceilometer statistics -m {...} -q resource_id={...} -p ..
-                self.polling_metrics(instance['id'])
+                self.polling_metrics(instance['id'],
+                                     proxy_name)
                 LOG.debug("Finshed to polling %s(%s) metric into zabbix"
                           % (instance.get('name'), instance.get('id')))
             else:
@@ -372,53 +221,32 @@ class CeilometerHandler:
                              instance.get('name'))
                           )
 
-    def polling_metrics(self, instance_id):
+    def polling_metrics(self, instance_id, proxy_name):
         """
         :param instance_id: nova instance uuid
+        :param proxy_name: zabbix proxy_name
         """
         def _polling(ids, METRICS):
             for metric in METRICS:
                 counter_volume = 0.0
-                try:
-                    for rsc_id in ids:
-                        contents = urllib2.urlopen(urllib2.Request(
-                            "http://" + self.ceilometer_api_host +
-                            ":" + self.ceilometer_api_port + "/v2/meters/" +
-                            metric + "/statistics?q.field=resource_id&" +
-                            "q.op=eq&q.type=&q.value=" + rsc_id + "&limit=1",
-                            headers={
-                                "Accept": "application/json",
-                                "Content-Type": "application/json",
-                                "X-Auth-Token": self.token})).read()
-                        response = json.loads(contents)
-                        if len(response) > 0:
-                            counter_volume += response[0]['avg']
-                    LOG.info("Polling Ceilometer metric, resource_id: %s, "
-                             "metric: %s, counter_name: %s"
-                             % (rsc_id, metric, counter_volume))
-                    self.send_data_zabbix(counter_volume, instance_id, metric)
-                except urllib2.HTTPError, e:
-                    if e.code == 401:
-                        msg = "Error... \nToken refused! " \
-                            "The request you have made requires authentication"
-                        LOG.error(msg)
-                        raise
-                    elif e.code == 404:
-                        msg = "Can't found for instances for tenant: %s" \
-                              % self.instance_id
-                        LOG.error(msg)
-                        raise
-                    elif e.code == 503:
-                        msg = "HTTP Error 503,The service of " \
-                              "ceilometer is unavailable"
-                        LOG.error(msg)
-                        raise
+                for rsc_id in ids:
+                    query = [{'op': 'eq',
+                              'value': rsc_id,
+                              'field': 'resource_id'}]
+                    response = self.clt_client.statistics(
+                                metric,
+                                q=query,
+                                limit=1)
+                    if len(response) > 0:
+                        counter_volume += response[0].avg
                     else:
-                        LOG.error("Unknown Error")
-                        raise
-                except Exception, ex:
-                    LOG.error(ex.message)
-                    raise
+                        LOG.info("The metric %s of resource_id %s statistics "
+                                 "not found." % (metric, rsc_id))
+                    LOG.info("Polling Ceilometer metri into zabbix proxy: %s,"
+                             "resource_id: %s, metric: %s, counter_name: %s"
+                             % (rsc_id, metric, counter_volume, proxy_name))
+                    self.send_data_zabbix(counter_volume, instance_id,
+                                          metric, proxy_name)
         # Get instance all taps
         network_nics_id = []
         # Get install all volumes
@@ -433,23 +261,23 @@ class CeilometerHandler:
         _polling([instance_id], INSTANCE_METRICS)
 
     def set_proxy_header(self, data):
-        """
-        Method used to simplify constructing the protocol to
+        """Method used to simplify constructing the protocol to
         communicate with Zabbix
+
         :param data: refers to the json message
         :rtype : returns the message ready to send to Zabbix server
         with the right header
         """
-        data_length = len(data)
-        data_header = struct.pack('i', data_length) + '\0\0\0\0'
-        HEADER = '''ZBXD\1%s%s'''
-        data_to_send = HEADER % (data_header, data)
+        # data_length = len(data)
+        # data_header = struct.pack('i', data_length) + '\0\0\0\0'
+        # HEADER = '''ZBXD\1%s%s'''
+        # data_to_send = HEADER % (data_header, data)
         payload = json.dumps(data)
         return payload
 
-    def send_data_zabbix(self, counter_volume, resource_id, item_key):
-        """
-        Method used to prepare the body with data from Ceilometer and send
+    def send_data_zabbix(self, counter_volume, resource_id,
+                         item_key, proxy_name):
+        """Method used to prepare the body with data from Ceilometer and send
         it to Zabbix using connect_zabbix method
 
         :param counter_volume: the actual measurement
@@ -457,7 +285,7 @@ class CeilometerHandler:
         :param item_key:    refers to the item key
         """
         tmp = json.dumps(counter_volume)
-        data = {"request": "history data", "host": self.zabbix_proxy_name,
+        data = {"request": "history data", "host": proxy_name,
                 "data": [{"host": resource_id,
                           "key": item_key,
                           "value": tmp}]}
