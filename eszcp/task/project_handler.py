@@ -35,22 +35,21 @@ LOG = log.logger(__name__)
 
 
 class ProjectEvents:
-
-    def __init__(self, zabbix_handler, channel, ks_client):
+    def __init__(self, zabbix_handler, connection, ks_client):
         """
         :param zabbix_handler: zabbix api handler
-        :param connection: rabbitmq channel instance
+        :param connection: rabbitmq connection instance
         :param ks_client: keystone client
         """
         self.zabbix_handler = zabbix_handler
         self.ks_client = ks_client
-        self.rabbit_channel = channel
+        self.rabbit_connection = connection
 
     def keystone_amq(self):
         """
         Method used to listen to keystone events
         """
-        channel = self.rabbit_channel
+        channel = self.rabbit_connection.channel()
         channel.exchange_declare(exchange='keystone', type='topic')
         channel.queue_declare(queue="zcp-keystone", exclusive=True)
         channel.queue_bind(exchange='keystone',
