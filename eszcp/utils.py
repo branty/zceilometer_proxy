@@ -15,6 +15,9 @@
 
 """Utilities and helper functions."""
 
+import datetime
+import json
+from oslo_utils import timeutils
 import re
 
 
@@ -22,6 +25,19 @@ AVALIABLE_STATUS = [
     'SHUTOFF',
     'ACTIVE'
     ]
+
+
+class Singleton(object):
+
+    def __init__(self, clz):
+        """Return the last handler which cloud be required more than once."""
+        self.clz = clz
+        self.instance = None
+
+    def __call__(self, *args, **kwargs):
+        if self.instance is None:
+            self.instance = self.clz(*args, **kwargs)
+        return self.instance
 
 
 def isUseable_instance(status):
@@ -60,3 +76,89 @@ def endswith_words(source):
     else:
         return False
     return match
+
+
+def date2str(date):
+    return date.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def str2date(string):
+    return datetime.datetime.strptime(string, "%Y-%m-%d %H:%M:%S")
+
+
+def ms2str(date):
+    return date.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def utcnow():
+    """Returns a datetime for the current utc time."""
+    return timeutils.utcnow()
+
+
+def mapping_json_to_dict(mapping_file):
+    """
+    Parsing the JSON file according to configuration
+    The configuration is supported as follows:
+    {
+     "period_colls":[60,300,3600]
+     "60":{
+           "meter_type":["cpu_util",
+                         "disk.read.bytes.rate",
+                         "..."]
+            "mult_topology":[1,5,15,120,1440]
+            "point_topology":[100,300,100,100,200]
+          },
+     "300":{
+          },
+     "3600":{
+            "meter_type":["instance",
+                          "volume",
+                          "account"
+                          ...
+                        ]
+            "mult_topology":[1,6,24]
+            "point_topology":[100,200,200]
+          }
+    }
+    """
+
+    def _parse_json_file(j_file):
+        with open(j_file) as f:
+            return json.load(f)
+    try:
+        map_dict = _parse_json_file(mapping_file)
+        if 'period_colls' in map_dict and \
+                isinstance(map_dict['period_colls'], list):
+            for i in map_dict['period_colls']:
+                if str(i) not in map_dict.keys():
+                    raise Exception("Parsing mapping.json error, "
+                                    "because of not key %d in "
+                                    "the mapping file" % i)
+        else:
+            raise Exception("Parsing mapping.json error,"
+                            "Maybe not key period_colls "
+                            "in the mapping file or "
+                            "the value of period_colls is not list")
+        return map_dict
+    except ValueError:
+        raise
+    except Exception:
+        raise
+
+
+def get_metric_BASE_T(map_dict, metric=None):
+    """
+    :param map_dict: Parsed mapping.json as a dict
+
+    """
+    if not isinstance(map_dict, dict):
+        raise
+    if metric is None:
+        return
+    for period in map_dict['period_colls']:
+        metrics = map_dict.get(str(period))
+        if not metrics:
+            continue
+        elif metric in metrics['meter_type']:
+            return int(period)
+    return

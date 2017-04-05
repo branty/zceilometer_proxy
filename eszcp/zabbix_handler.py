@@ -27,6 +27,8 @@ including access to several API methods
 
 import functools
 import json
+import socket
+import struct
 import urllib2
 
 from eszcp.common import log
@@ -49,9 +51,75 @@ def logged(func):
     return with_logging
 
 
-class ZabbixHandler:
-    def __init__(self, zabbix_admin_user,
-                 zabbix_admin_pass, zabbix_host,
+class Base_Handler(object):
+    def __init__(self, zabbix_host, zabbix_port=10051):
+        self.zabbix_host = zabbix_host
+        self.zabbix_port = zabbix_port
+
+    def set_proxy_header(self, data):
+        """Method used to simplify constructing the protocol to
+        communicate with Zabbix
+
+        :param data: refers to the json message
+        :rtype : returns the message ready to send to Zabbix server
+        with the right header
+        """
+        # data_length = len(data)
+        # data_header = struct.pack('i', data_length) + '\0\0\0\0'
+        # HEADER = '''ZBXD\1%s%s'''
+        # data_to_send = HEADER % (data_header, data)
+        payload = json.dumps(data)
+        return payload
+
+    def connect_zabbix(self, payload):
+        """
+        Method used to send information to Zabbix
+        :param payload: refers to the json message prepared to send to Zabbix
+        :rtype : returns the response received by the Zabbix API
+        """
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((self.zabbix_host, int(self.zabbix_port)))
+        s.send(payload)
+        # read its response, the first five bytes are the header again
+        response_header = s.recv(5, socket.MSG_WAITALL)
+        if not response_header == 'ZBXD\1':
+            raise ValueError('Got invalid response')
+
+        # read the data header to get the length of the response
+        response_data_header = s.recv(8, socket.MSG_WAITALL)
+        response_data_header = response_data_header[:4]
+        response_len = struct.unpack('i', response_data_header)[0]
+
+        # read the whole rest of the response now that we know the length
+        response_raw = s.recv(response_len, socket.MSG_WAITALL)
+        s.close()
+        LOG.info(response_raw)
+        response = json.loads(response_raw)
+
+        return response
+
+    def send_data_zabbix(self, counter_volume, resource_id,
+                         item_key, proxy_name):
+        """Method used to prepare the body with data from Ceilometer and send
+        it to Zabbix using connect_zabbix method
+
+        :param counter_volume: the actual measurement
+        :param resource_id:  refers to the resource ID
+        :param item_key:    refers to the item key
+        """
+        tmp = json.dumps(counter_volume)
+        data = {"request": "history data", "host": proxy_name,
+                "data": [{"host": resource_id,
+                          "key": item_key,
+                          "value": tmp}]}
+
+        payload = self.set_proxy_header(data)
+        self.connect_zabbix(payload)
+
+
+class ZabbixHandler(Base_Handler):
+    def __init__(self, zabbix_admin_user, zabbix_admin_pass,
+                 zabbix_host, zabbix_port,
                  template_name, ks_client, nv_client):
         """
         :param zabbix_user: zabbix admin user
@@ -62,9 +130,9 @@ class ZabbixHandler:
         :parms nv_client: Openstack compute service,nova client
         :parms zabbix_hdl:zabbix handler
         """
+        super(ZabbixHandler, self).__init__(zabbix_host, zabbix_port)
         self.zabbix_admin_user = zabbix_admin_user
         self.zabbix_admin_pass = zabbix_admin_pass
-        self.zabbix_host = zabbix_host
         self.template_name = template_name
         self.ks_client = ks_client
         self.nv_client = nv_client
@@ -484,7 +552,7 @@ class ZabbixHandler:
         for item in self.group_list:
             if item[1] == tenant_id:
                 tenant_name = item[0]
-                group_id = self.find_group_id(tenant_name,tenant_id)
+                group_id = self.find_group_id(tenant_name, tenant_id)
                 self.delete_host_group(group_id)
                 self.group_list.remove(item)
 

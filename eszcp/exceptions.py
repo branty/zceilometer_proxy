@@ -24,3 +24,8 @@ class ZcpException(Exception):
 class TemplateNotFound(ZcpException):
     """"Not find default template in zabbix"""
     pass
+
+
+class NotImplementedError(NotImplementedError):
+    """Not Implementation"""
+    pass

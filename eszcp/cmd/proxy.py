@@ -30,7 +30,7 @@ import multiprocessing
 
 from eszcp.common import log
 from eszcp.common import conf
-from eszcp.task import ceilometer_handler
+from eszcp.task.polling.base_handler import HandlerAdapter
 from eszcp.task import nova_handler
 from eszcp.task import keystone_handler
 from eszcp.keystone_client import Client
@@ -64,22 +64,19 @@ def init_zcp(processes):
                                                     'zabbix_configs',
                                                     'zabbix_host'),
                                               conf_file.read_option(
+                                                    'zabbix_configs',
+                                                    'zabbix_port'),
+                                              conf_file.read_option(
                                                     'zcp_configs',
                                                     'template_name'),
                                               ks_client,
                                               nv_client)
 
-    # Creation of the Ceilometer Handler class
-    # Responsible for the communication with OpenStack's Ceilometer,
+    # Creation of the Polling Handler class
+    # Responsible for the communication with OpenStack's Ceilometer or Mongo,
     # polling for changes every N seconds
-    ceilometer_hdl = ceilometer_handler.CeilometerHandler(
-                        conf_file.read_option('zcp_configs',
-                                              'polling_interval'),
-                        conf_file.read_option('zabbix_configs',
-                                              'zabbix_host'),
-                        conf_file.read_option('zabbix_configs',
-                                              'zabbix_port'),
-                        ks_client, nv_client, zabbix_hdl)
+    polling_hdl = HandlerAdapter.get_handler(conf_file, ks_client,
+                                             nv_client, zabbix_hdl)
 
     # First run of the Zabbix handler for retrieving the necessary information
     zabbix_hdl.first_run()
@@ -91,17 +88,17 @@ def init_zcp(processes):
     # Creation of the Nova Handler class
     # Responsible for detecting the creation of new instances in OpenStack,
     # translated then to Hosts in Zabbix
-    nova_hdl = nova_handler.NovaEvents(zabbix_hdl, ceilometer_hdl, channel)
+    nova_hdl = nova_handler.NovaEvents(zabbix_hdl, channel)
 
     # Creation of the Project Handler class
     # Responsible for detecting the creation of new tenants in OpenStack,
     # translated then to HostGroups in Zabbix
-    project_hdl = keystone_handler.KeystoneEvents(
+    keystone_hdl = keystone_handler.KeystoneEvents(
                         zabbix_hdl, channel, ks_client)
 
     # Create and append processes to process list
     LOG.INFO('**************** Keystone listener started ****************')
-    p1 = multiprocessing.Process(target=project_hdl.keystone_amq)
+    p1 = multiprocessing.Process(target=keystone_hdl.keystone_amq)
     p1.daemon = True
     processes.append(p1)
 
@@ -110,7 +107,7 @@ def init_zcp(processes):
     p2.daemon = True
     processes.append(p2)
 
-    p3 = multiprocessing.Process(target=ceilometer_hdl.interval_run)
+    p3 = multiprocessing.Process(target=polling_hdl.interval_run)
     p3.daemon = True
     processes.append(p3)
 

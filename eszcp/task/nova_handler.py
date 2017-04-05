@@ -35,15 +35,13 @@ LOG = log.logger(__name__)
 
 
 class NovaEvents:
-    def __init__(self, zabbix_handler, ceilometer_handler, channel):
+    def __init__(self, zabbix_handler, channel):
 
         """
         :param zabbix_handler: zabbix api handler
-        :param ceilometer_handler: ceilometer api handler
         :param connection: rabbitmq channel instance
         """
         self.zabbix_handler = zabbix_handler
-        self.ceilometer_handler = ceilometer_handler
         self.rabbit_channel = channel
 
     def nova_amq(self):
@@ -89,16 +87,16 @@ class NovaEvents:
                                                 tenant_name)
                 LOG.info("Creating a host: %s(%s) in Zabbix Server"
                          % (instance_id, instance_name))
-                self.ceilometer_handler.host_list = \
-                    self.ceilometer_handler.get_hosts_ID()
+                self.zabbix_handler.host_list = \
+                    self.zabbix_handler.get_hosts_ID()
             elif type_of_message == 'compute.instance.delete.end':
                 host = payload['payload']['instance_id']
                 host_id = self.zabbix_handler.find_host_id(host)
                 self.zabbix_handler.delete_host(host_id)
                 LOG.info("Deleting a host: %s in Zabbix Server"
                          % host_id)
-                self.ceilometer_handler.host_list = \
-                    self.ceilometer_handler.get_hosts_ID()
+                self.zabbix_handler.host_list = \
+                    self.zabbix_handler.get_hosts_ID()
             else:
                 # TO DO
                 # Maybe more event types will be supported
