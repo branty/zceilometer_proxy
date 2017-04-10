@@ -36,30 +36,36 @@ LOG = log.logger(__name__)
 
 class KeystoneEvents:
 
-    def __init__(self, zabbix_handler, channel, ks_client):
+    def __init__(self, zabbix_handler, connection, ks_client):
         """
         :param zabbix_handler: zabbix api handler
-        :param connection: rabbitmq channel instance
+        :param connection: rabbitmq connection instance
         :param ks_client: keystone client
         """
         self.zabbix_handler = zabbix_handler
         self.ks_client = ks_client
-        self.rabbit_channel = channel
+        self.mqconnc = connection
 
     def keystone_amq(self):
         """
         Method used to listen to keystone events
         """
-        channel = self.rabbit_channel
-        channel.exchange_declare(exchange='keystone', type='topic')
-        channel.queue_declare(queue="zcp-keystone", exclusive=True)
-        channel.queue_bind(exchange='keystone',
-                           queue="zcp-keystone",
-                           routing_key='notifications.#')
-        channel.basic_consume(self.keystone_callback,
-                              queue="zcp-keystone",
-                              no_ack=True)
-        channel.start_consuming()
+        try:
+            LOG.info("Start consuming keystone messages from rabbitmq ...")
+            channel = self.mqconnc.connection.channel()
+            channel.exchange_declare(exchange='keystone', type='topic')
+            channel.queue_declare(queue="zcp-keystone", exclusive=True)
+            channel.queue_bind(exchange='keystone',
+                               queue="zcp-keystone",
+                               routing_key='notifications.#')
+            channel.basic_consume(self.keystone_callback,
+                                  queue="zcp-keystone",
+                                  no_ack=True)
+            channel.start_consuming()
+        except Exception as e:
+            LOG.error("Fail to consume messages from keystone: %s" % e)
+            # Make sure consume messages normally
+            self.mqconnc()
 
     def _handler_events(self, payload):
         if payload['event_type'] == 'identity.project.created':

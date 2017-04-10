@@ -35,31 +35,37 @@ LOG = log.logger(__name__)
 
 
 class NovaEvents:
-    def __init__(self, zabbix_handler, channel):
+    def __init__(self, zabbix_handler, connection):
 
         """
         :param zabbix_handler: zabbix api handler
-        :param connection: rabbitmq channel instance
+        :param connection: rabbitmq connection instance
         """
         self.zabbix_handler = zabbix_handler
-        self.rabbit_channel = channel
+        self.mqconnc = connection
 
     def nova_amq(self):
         """
         Method used to listen to nova events
 
         """
-        channel = self.rabbit_channel
-        channel.exchange_declare(exchange='nova', type='topic')
-        channel.queue_declare(queue="zcp-nova", exclusive=True)
-        channel.queue_bind(exchange='nova', queue="zcp-nova",
-                           routing_key='notifications.#')
-        channel.queue_bind(exchange='nova', queue="zcp-nova",
-                           routing_key='compute.#')
-        channel.basic_consume(self.nova_callback,
-                              queue="zcp-nova",
-                              no_ack=True)
-        channel.start_consuming()
+        try:
+            LOG.info("Start consuming nova messages from rabbitmq ...")
+            channel = self.mqconnc.connection.channel()
+            channel.exchange_declare(exchange='nova', type='topic')
+            channel.queue_declare(queue="zcp-nova", exclusive=True)
+            channel.queue_bind(exchange='nova', queue="zcp-nova",
+                               routing_key='notifications.#')
+            channel.queue_bind(exchange='nova', queue="zcp-nova",
+                               routing_key='compute.#')
+            channel.basic_consume(self.nova_callback,
+                                  queue="zcp-nova",
+                                  no_ack=True)
+            channel.start_consuming()
+        except Exception as e:
+            LOG.error("Fail to consume messages from nova: %s" % e)
+            # Make sure consume messages normally
+            self.mqconnc()
 
     def nova_callback(self, ch, method, properties, body):
         """

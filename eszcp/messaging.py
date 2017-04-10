@@ -14,6 +14,7 @@
 #    under the License.
 
 import pika
+import time
 
 from eszcp.common import conf
 from eszcp.common import log
@@ -27,29 +28,60 @@ user = cfg.read_option('os_rabbitmq', 'rabbit_user')
 passwd = cfg.read_option('os_rabbitmq', 'rabbit_pass')
 port = cfg.read_option('os_rabbitmq', 'rabbit_port')
 vh = cfg.read_option('os_rabbitmq', 'rabbit_virtual_host')
+max_retries = int(cfg.read_option('os_rabbitmq', 'max_retries', -1))
+retry_interval = int(cfg.read_option('os_rabbitmq', 'retry_interval', 5))
 
 
 def connection():
     connect = None
     connection_state = False
-    for host in hosts.split(','):
+    attemps = 0
+    MAX_RETRIES = max_retries * len(hosts.split(','))
+    while True:
+        if connection_state:
+            break
         try:
-            LOG.info("Conneting to Rabbitmq server %s..." % host)
-            connect = pika.BlockingConnection(pika.ConnectionParameters(
-                host=host,
-                port=int(port),
-                virtual_host=vh,
-                credentials=pika.PlainCredentials(user,
-                                                  passwd)))
+            for host in hosts.split(','):
+                LOG.info("Connecting to Rabbitmq server %s..." % host)
+                connect = pika.BlockingConnection(pika.ConnectionParameters(
+                    host=host,
+                    port=int(port),
+                    virtual_host=vh,
+                    credentials=pika.PlainCredentials(user,
+                                                      passwd)))
         except Exception as e:
-            LOG.warning("Fail to connect to Rabbitmq server %s : %s" % (host,
-                                                                        e))
+            if max_retries < 0:
+                LOG.error('Unable to connect to the Rabbitmq cluster: '
+                          '%(msg)s.Trying again in %(retry_interval)d '
+                          'seconds,Continuing to retry to connect '
+                          % {'msg': e,
+                             'retry_interval': retry_interval})
+                time.sleep(retry_interval)
+            elif max_retries > 0 and attemps <= MAX_RETRIES:
+                LOG.error('Unable to connect to the Rabbitmq cluster: '
+                          '%(msg)s.Trying again in %(retry_interval)d '
+                          'seconds,max_retries time: %(max_retries)d,'
+                          'retry times left:%(left)d'
+                          % {'msg': e,
+                             'retry_interval': retry_interval,
+                             'max_retries': MAX_RETRIES,
+                             'left': (MAX_RETRIES - attemps)})
+                attemps += 1
+                time.sleep(retry_interval)
+            else:
+                LOG.error('Unable to connect to the Rabbitmq cluster: '
+                          '%(msg)s.' % {'msg': e})
+                raise
         else:
             connection_state = True
-            break
-    if connection_state:
-        return connect
-    else:
-        LOG.error("Fail to connect to Rabbitmq nodes: %s. Please configure "
-                  "rabbitmq with correct parameters!" % hosts.split(','))
-        raise
+    return connect
+
+
+class MQConnection(object):
+    """RabbitMQ connection class
+    """
+    def __init__(self):
+        self.connection = connection()
+
+    def __call__(self):
+        self.connection = connection()

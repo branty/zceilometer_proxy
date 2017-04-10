@@ -46,8 +46,8 @@ class Handler(object):
     def run(self):
         hosts, hosts_map = self.zabbix_hdl.get_hosts(filter_no_proxy=True)
         # Refresh zabbix hostgroups and proxies if needed
-        # self.zabbix_hdl.check_host_groups()
-        # self.zabbix_hdl.check_proxies()
+        self.zabbix_hdl.check_host_groups()
+        self.zabbix_hdl.check_proxies()
         self.polling_metrics(hosts, hosts_map)
 
     def polling_metrics(self, instance_id, proxy_name):

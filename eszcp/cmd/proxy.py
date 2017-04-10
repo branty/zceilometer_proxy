@@ -81,20 +81,17 @@ def init_zcp(processes):
     # First run of the Zabbix handler for retrieving the necessary information
     zabbix_hdl.first_run()
 
-    # Create instance about connection of Rabbitmq servers
-    connection = messaging.connection()
-    channel = connection.channel()
-
     # Creation of the Nova Handler class
     # Responsible for detecting the creation of new instances in OpenStack,
     # translated then to Hosts in Zabbix
-    nova_hdl = nova_handler.NovaEvents(zabbix_hdl, channel)
+    nova_hdl = nova_handler.NovaEvents(zabbix_hdl, messaging.MQConnection())
 
     # Creation of the Project Handler class
     # Responsible for detecting the creation of new tenants in OpenStack,
     # translated then to HostGroups in Zabbix
-    keystone_hdl = keystone_handler.KeystoneEvents(
-                        zabbix_hdl, channel, ks_client)
+    keystone_hdl = keystone_handler.KeystoneEvents(zabbix_hdl,
+                                                   messaging.MQConnection(),
+                                                   ks_client)
 
     # Create and append processes to process list
     LOG.INFO('**************** Keystone listener started ****************')

@@ -29,3 +29,8 @@ class TemplateNotFound(ZcpException):
 class NotImplementedError(NotImplementedError):
     """Not Implementation"""
     pass
+
+
+class MappingFileNotFound(ZcpException):
+    """Not find mapping.json"""
+    pass

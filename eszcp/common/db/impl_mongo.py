@@ -18,6 +18,7 @@ import pymongo
 import six
 import time
 
+from eszcp import exceptions
 from eszcp.common import conf
 from eszcp.common import log
 from eszcp.common.db import models
@@ -43,11 +44,11 @@ def parse_metric_json():
     elif os.path.exists(mapping_file):
         CACHE_MAPPING_FILE = utils.mapping_json_to_dict(mapping_file)
     if not CACHE_MAPPING_FILE:
-        LOG.exception("Can't find Metric mapping.json file ,"
-                      "Make sure the mapping_file exist "
-                      "under section [collector] "
-                      "which must be configured properly.")
-        raise
+        LOG.error("Can't find Metric mapping.json file, "
+                  "Make sure the mapping_file exist "
+                  "under section [collector] "
+                  "which must be configured properly.")
+        raise exceptions.MappingFileNotFound
     return CACHE_MAPPING_FILE
 
 
@@ -107,7 +108,7 @@ class Connection(object):
                             {'errmsg': e, 'retry_interval': retry_interval})
                 attempts += 1
                 time.sleep(retry_interval)
-            except Exception:
+            except Exception as e:
                 LOG.warning('Unable to connect to the database server: '
                             '%(errmsg)s.' % {'errmsg': e})
                 raise
@@ -161,8 +162,8 @@ class Connection(object):
                                                     self._APOCALYPSE),
                         source=r['source'],
                         metadata=pymongo_utils.unquote_keys(r['metadata']),
-                        resource_name=(pymongo_utils.unquote_keys(
-                                   r['resource_name'])) for r in results)]
+                        resource_name=pymongo_utils.unquote_keys(
+                                   r['resource_name'])) for r in results]
 
     def get_meter_statistics(self, sample_filter, period=None, groupby=None,
                              aggregate=None, limit=None):
