@@ -167,7 +167,6 @@ class ZabbixHandler(Base_Handler):
         zabbix_auth = response['result']
         return zabbix_auth
 
-    @logged
     def check_proxies(self):
         """
         Method used to check if those proxies exist.
@@ -195,17 +194,6 @@ class ZabbixHandler(Base_Handler):
         # each item in current_proxies:[proxy_id,domain_id]
         current_proxies = []
         for domain in domains:
-            payload = {
-                       "jsonrpc": "2.0",
-                       "method": "proxy.create",
-                       "params": {
-                           "host": domain.name,
-                           "status": "5"
-                       },
-                       "auth": self.api_auth,
-                       "id": 1
-                       }
-            response = self.contact_zabbix_server(payload)
             if domain.name not in proxies:
                 '''
                 Check if proxy exists, if not create one
@@ -217,6 +205,17 @@ class ZabbixHandler(Base_Handler):
                     continue
                 LOG.info("%s is not in zabbix proxies, starting to create a "
                          "new proxy mapping to keystone domain" % domain.name)
+                payload = {
+                       "jsonrpc": "2.0",
+                       "method": "proxy.create",
+                       "params": {
+                           "host": domain.name,
+                           "status": "5"
+                       },
+                       "auth": self.api_auth,
+                       "id": 1
+                       }
+                response = self.contact_zabbix_server(payload)
                 # NOTE: when '@','#' or other No ASSIC char in name string,
                 # raise 'Invalid Params' error.
                 # Then Replace zabbix proxy name with domain ID
@@ -337,7 +336,7 @@ class ZabbixHandler(Base_Handler):
                 LOG.warning(msg)
 
     def create_host(self, instance_name, instance_id,
-                    tenant_name, tenant_id, domain_id):
+                    tenant_name, tenant_id, domain_id=None):
 
         """
         Method used to create a host in Zabbix server
@@ -348,16 +347,19 @@ class ZabbixHandler(Base_Handler):
         :param domain_id:     refers to the domain id
         """
         group_id = self.find_group_id(tenant_name, tenant_id)
+        if not domain_id:
+            project = self.ks_client.get_project(tenant_id)
+            domain_id = project.domain_id
         proxy_id = self.find_proxy_id(domain_id)
-
+        hostname = instance_name
         if not (instance_id in instance_name):
-            instance_name = instance_name + '_' + instance_id[:8]
+            hostname = instance_name + '_' + instance_id[:8]
 
         payload = {"jsonrpc": "2.0",
                    "method": "host.create",
                    "params": {
                        "host": instance_id,
-                       "name": instance_name,
+                       "name": hostname,
                        "proxy_hostid": proxy_id,
                        "interfaces": [
                            {
@@ -488,23 +490,27 @@ class ZabbixHandler(Base_Handler):
         """
         Method used to find a host Id in Zabbix server
 
-        :param host:
+        :param host: ref to nova instance_id
         :return: returns the host id
         """
         host_id = None
         payload = {"jsonrpc": "2.0",
                    "method": "host.get",
                    "params": {
-                       "output": "extend"
+                       "output": "extend",
+                       "filter": {"host": host}
                    },
                    "auth": self.api_auth,
                    "id": 2
                    }
         response = self.contact_zabbix_server(payload)
-        hosts_list = response['result']
-        for line in hosts_list:
-            if host == line['host']:
-                host_id = line['hostid']
+        if 'error' in response:
+            LOG.error("Falied to find host(%s):%s,maybe zabbix server "
+                      "is down" % (host, response['error']['data']))
+        elif len(response.get('result')):
+            host_id = response['result'][0]['hostid']
+        else:
+            LOG.waring("Falied to find host: %s" % host)
         return host_id
 
     def delete_host(self, host_id):
@@ -521,7 +527,12 @@ class ZabbixHandler(Base_Handler):
                    "auth": self.api_auth,
                    "id": 1
                    }
-        self.contact_zabbix_server(payload)
+        response = self.contact_zabbix_server(payload)
+        if 'error' in response:
+            LOG.error("Falied to delete host:%s,maybe zabbix server "
+                      "is down" % host_id)
+        else:
+            LOG.info("Success to delete host:%s" % host_id)
 
     def host_group_list(self, tenants):
         """
@@ -601,7 +612,6 @@ class ZabbixHandler(Base_Handler):
                        "id": 1
         }
         proxy_id = None
-        self.contact_zabbix_server(payload)
         response = self.contact_zabbix_server(payload)
         # NOTE: when '@','#' or other No ASSIC char in name string,
         # raise 'Invalid Params' error.
@@ -637,10 +647,10 @@ class ZabbixHandler(Base_Handler):
                 if 'result' in response:
                     LOG.info("Success to delete a new proxy: %s"
                              % response['result']['proxyids'][0])
+                    self.proxies.remove(item)
                 else:
                     LOG.warning("Falied to delete a new proxy, error "
                                 "message:%s" % response['error'])
-                self.proxies.remove(item)
 
     def get_items_by_template(self):
         """This method find all items in specified template

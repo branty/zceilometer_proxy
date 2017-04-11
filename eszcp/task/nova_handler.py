@@ -73,9 +73,11 @@ class NovaEvents:
         payload = json.loads(body)
 
         try:
-            tenant_name = payload.get('_context_project_name')
-            if not tenant_name:
-                LOG.debug("Drop a notification message")
+            project_name = payload.get('_context_project_name')
+            project_id = payload.get('_context_project_id')
+            if not (project_id or project_name):
+                LOG.debug("Drop a notification message,"
+                          "project_name or project_id is not found.")
                 return
             type_of_message = payload['event_type']
 
@@ -84,23 +86,21 @@ class NovaEvents:
                 instance_name = payload['payload']['hostname']
                 self.zabbix_handler.create_host(instance_name,
                                                 instance_id,
-                                                tenant_name)
+                                                project_name,
+                                                project_id)
                 LOG.info("Creating a host: %s(%s) in Zabbix Server"
                          % (instance_id, instance_name))
-                self.zabbix_handler.host_list = \
-                    self.zabbix_handler.get_hosts_ID()
             elif type_of_message == 'compute.instance.delete.end':
                 host = payload['payload']['instance_id']
                 host_id = self.zabbix_handler.find_host_id(host)
                 self.zabbix_handler.delete_host(host_id)
                 LOG.info("Deleting a host: %s in Zabbix Server"
                          % host_id)
-                self.zabbix_handler.host_list = \
-                    self.zabbix_handler.get_hosts_ID()
             else:
                 # TO DO
                 # Maybe more event types will be supported
                 pass
-        except Exception, ex:
-            LOG.error(ex.message)
-            raise ex
+        except Exception as ex:
+            LOG.error('Failed to handler nova event: %(event_type)s '
+                      'error message: %(msg)s.'
+                      % {'event_type': payload['event_type'], 'msg': ex})
